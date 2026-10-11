@@ -11,7 +11,7 @@ Die Texte im Spiel sind auf **Englisch**, die Kommentare im Code auf Deutsch.
 ## Schnellstart (ohne Programmieren)
 
 1. Öffne **`NovaClash.rbxl`** in Roblox Studio (Doppelklick oder *Datei → Öffnen*).
-2. Drücke **Play** (F5). Die komplette Welt (Lobby, Arena, Licht) wird beim Start automatisch per Code gebaut.
+2. Drücke **Play** (F5). Die komplette Welt (Terrain-Landschaft, Lobby, Arena, Licht) wird beim Start automatisch per Code gebaut – das dauert ein paar Sekunden.
 3. Zum Speichern von Spielerdaten: Spiel veröffentlichen und unter
    *Game Settings → Security → „Enable Studio Access to API Services“* aktivieren.
 
@@ -47,8 +47,13 @@ Auf Handy/Tablet erscheinen große Kampf-Knöpfe, die Fähigkeiten-Slots sind an
   Danach erscheint eine Ergebnis-Karte mit Vorschau-Knopf.
 - **Startmenü mit Intro-Animation** (beim ersten Beitritt ein längeres Intro mit Energiering) und **interaktives Tutorial**
   (Leuchtpfad zu den Trainingspuppen, Pfeile auf HUD-Knöpfe, Gratis-Starterkiste).
-- **GUI**: kosmischer Neon-Stil, animierte Verläufe, Buttons mit Glanz-Effekt, Blur hinter Fenstern, Konfetti,
-  Kombo-Zähler, Schadenszahlen, Killfeed, Lebensbalken über Kämpfern.
+- **Welt**: grüne Terrain-Landschaft mit Hügeln, schneebedeckten Bergen, See und Bach, Kiefern und Eichen,
+  ein Dorf-Platz als Lobby (Kisten-Altar, Black-Hole-Schrein, Trainingsplatz, Lagerfeuer, Zelte, Hütten)
+  und ein altes Stein-Kolosseum als Arena.
+- **GUI**: „Chunky Game UI“ – satte Farben, dicke Umrisse, 3D-Buttons zum Eindrücken, runde Schrift,
+  Shop mit 3D-Vorschau (Schwarzes Loch, Münzhaufen), Kombo-Zähler, Schadenszahlen, Killfeed, Lebensbalken über Kämpfern.
+- **Bot-Runden**: Ist niemand bereit, kämpfen Bots gegeneinander (zuschauen möglich); sobald ein Spieler bereit ist,
+  startet eine echte Runde.
 - **Admin-System**: siehe unten.
 
 ## Admin (RealThebestall)
@@ -87,6 +92,8 @@ Alle Admin-Befehle werden auf dem Server geprüft.
 | Sounds | `src/shared/Sounds.luau` – standardmäßig eingebaute Roblox-Sounds; für noch mehr Wucht eigene Sound-IDs aus dem Creator Store eintragen |
 | Server-Logik der Fähigkeiten | `src/server/Services/AbilityService.luau` |
 | Effekte der Fähigkeiten | `src/client/VFX/AbilitiesBasic.luau`, `src/client/VFX/AbilitiesCinematic.luau` |
+| Landschaft / Map | `src/server/Services/WorldBuilder.luau` |
+| Design (Farben, Schriften, Buttons) | `src/client/UI/Theme.luau`, `src/client/UI/UI.luau` |
 
 Eine neue Fähigkeit braucht drei Dinge: einen Eintrag in `Abilities.luau`, einen Handler in `AbilityService.luau`
 und eine VFX-Funktion mit derselben Id in `AbilitiesBasic.luau` (oder `AbilitiesCinematic.luau`).

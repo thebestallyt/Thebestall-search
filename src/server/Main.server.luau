@@ -21,6 +21,14 @@ local AdminService = require(Services:WaitForChild("AdminService"))
 
 local world = WorldBuilder.Build()
 
+-- Spieler, die schon waehrend des Weltaufbaus gespawnt sind, zur Lobby bringen
+for _, player in Players:GetPlayers() do
+	local character = player.Character
+	if character then
+		character:PivotTo(world.LobbySpawn)
+	end
+end
+
 DataService.Init()
 CombatService.Init()
 AbilityService.Init()

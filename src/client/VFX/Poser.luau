@@ -110,6 +110,55 @@ Poser.Poses = {
 	Slash = { RightShoulder = A(rad(60), 0, rad(70)), Waist = A(0, rad(-30), 0) },
 	Sheath = { RightShoulder = A(rad(-15), 0, rad(15)), LeftShoulder = A(rad(10), 0, rad(-15)), Neck = A(rad(-10), 0, 0) },
 	Victory = { RightShoulder = A(rad(170), 0, rad(-10)), LeftShoulder = A(rad(10), 0, rad(-20)), Neck = A(rad(12), 0, 0) },
+
+	-- Zusaetzliche Posen fuer Kampf und Faehigkeiten
+	-- Ausholen in die Hocke (Arme nach hinten, Oberkoerper nach vorne)
+	Crouch = {
+		RightShoulder = A(rad(-35), 0, rad(22)),
+		LeftShoulder = A(rad(-35), 0, rad(-22)),
+		Waist = A(rad(-22), 0, 0),
+		Neck = A(rad(12), 0, 0),
+		RightHip = A(rad(28), 0, 0),
+		LeftHip = A(rad(-12), 0, 0),
+	},
+	-- Weiter Ausfallschritt mit gestrecktem rechten Arm
+	LungePunch = {
+		RightShoulder = A(rad(96), 0, rad(-4)),
+		LeftShoulder = A(rad(-38), 0, rad(-12)),
+		Waist = A(rad(-14), rad(32), 0),
+		RightHip = A(rad(-22), 0, 0),
+		LeftHip = A(rad(30), 0, 0),
+	},
+	-- Linker Haken (Spiegelung des rechten)
+	HookLeft = {
+		LeftShoulder = A(rad(90), rad(-25), rad(30)),
+		RightShoulder = A(rad(25), 0, rad(14)),
+		Waist = A(0, rad(-34), 0),
+	},
+	-- Energie sammeln: Arme tief und leicht nach innen, Oberkoerper gebeugt
+	ChargeLow = {
+		RightShoulder = A(rad(35), 0, rad(40)),
+		LeftShoulder = A(rad(35), 0, rad(-40)),
+		Waist = A(rad(-12), 0, 0),
+		Neck = A(rad(-8), 0, 0),
+	},
+	-- X-Schnitt: erst hoch rechts ausholen, dann diagonal durchziehen
+	XSlash1 = { RightShoulder = A(rad(160), 0, rad(-35)), LeftShoulder = A(rad(20), 0, rad(-25)), Waist = A(0, rad(24), 0) },
+	XSlash2 = { RightShoulder = A(rad(35), 0, rad(75)), LeftShoulder = A(rad(150), 0, rad(30)), Waist = A(rad(-10), rad(-36), 0) },
+	-- Rueckstoss nach Guard Break
+	Stagger = {
+		RightShoulder = A(rad(-25), 0, rad(35)),
+		LeftShoulder = A(rad(-25), 0, rad(-35)),
+		Waist = A(rad(14), 0, 0),
+		Neck = A(rad(18), 0, 0),
+	},
+	-- Feueratem: beide Haende nach vorne, Oberkoerper leicht zurueck
+	Breath = {
+		RightShoulder = A(rad(84), 0, rad(-18)),
+		LeftShoulder = A(rad(84), 0, rad(18)),
+		Waist = A(rad(8), 0, 0),
+		Neck = A(rad(6), 0, 0),
+	},
 }
 
 return Poser

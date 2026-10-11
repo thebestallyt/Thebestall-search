@@ -84,12 +84,15 @@ Config.Admins = {
 }
 
 -- Welt --------------------------------------------------------------------
+-- Die Welt ist ein durchgehendes Tal aus Terrain (Wiesen, Huegel, See), umringt von Bergen.
+-- Lobby (Lager-Dorf) und Arena (alte Steinruine) liegen auf derselben Talwiese.
+-- WICHTIG: LobbyCenter.Y (Bodenhoehe der Wiese) sollte ein Vielfaches von 4 sein (Terrain-Raster).
 Config.World = {
-	LobbyCenter = Vector3.new(0, 60, 0),
-	ArenaCenter = Vector3.new(0, 60, 600),
+	LobbyCenter = Vector3.new(0, 0, 0), -- Mitte des Dorfplatzes (Bodenhoehe der Wiese)
+	ArenaCenter = Vector3.new(0, 1, -600), -- Mitte des Arena-Bodens (Oberkante der Steinplatte)
 	ArenaRadius = 78,
 	LobbyRadius = 70,
-	CrateStage = Vector3.new(0, 400, -3000), -- weit entfernt, nur lokal fuer Kisten-Animationen
+	CrateStage = Vector3.new(0, 900, -4000), -- weit weg im leeren Himmel, nur lokal fuer Kisten-Animationen
 }
 
 return Config

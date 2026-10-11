@@ -198,33 +198,108 @@ end
 
 local function buildTouchButtons()
 	local gui = UI.Screen("NovaTouch", 6)
+	local C = Theme.Colors
 	local holder = UI.Make("Frame", {
+		Name = "TouchButtons",
 		BackgroundTransparency = 1,
 		AnchorPoint = Vector2.new(1, 1),
 		Position = UDim2.new(1, -20, 1, -220),
-		Size = UDim2.fromOffset(260, 220),
+		Size = UDim2.fromOffset(260, 224),
 		Parent = gui,
 	})
 	UI.Scaled(holder)
-	local function round(icon: string, size: number, pos: UDim2, gradient: ColorSequence): TextButton
+	-- Kleine Handys: links neben den Sprung-Knopf (Roblox setzt ihn dort unten rechts hin),
+	-- groessere Geraete: ueber den Sprung-Knopf
+	local function place()
+		local cam = workspace.CurrentCamera
+		if not cam then
+			return
+		end
+		local v = cam.ViewportSize
+		if math.min(v.X, v.Y) <= 500 then
+			holder.Position = UDim2.new(1, -104, 1, -10)
+		else
+			holder.Position = UDim2.new(1, -20, 1, -220)
+		end
+	end
+	place()
+	UI.ScaleChanged:Connect(place)
+
+	-- Runder 3D-Knopf: dunkle Lippe unten, Farbflaeche oben, dicker Umriss, Glanz, Text mit Kontur
+	local function round(text: string, size: number, pos: UDim2, fill: Color3, lipColor: Color3, textSize: number): TextButton
+		local lip = math.max(4, math.floor(size * 0.07))
 		local b = UI.Make("TextButton", {
+			Name = text,
 			Text = "",
 			AutoButtonColor = false,
-			BackgroundColor3 = Color3.new(1, 1, 1),
-			BackgroundTransparency = 0.15,
-			Size = UDim2.fromOffset(size, size),
+			BackgroundTransparency = 1,
+			Size = UDim2.fromOffset(size, size + lip),
 			Position = pos,
 			Parent = holder,
 		})
-		UI.Round(b)
-		UI.Gradient(b, gradient, 45)
-		UI.Stroke(b, Color3.new(1, 1, 1), 2, 0.4)
-		UI.Text({ Text = icon, TextSize = size * 0.45, Size = UDim2.fromScale(1, 1), Parent = b })
+		local base = UI.Make("Frame", {
+			Name = "Lip",
+			BackgroundColor3 = lipColor,
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(0, lip),
+			Size = UDim2.fromOffset(size, size),
+			Parent = b,
+		})
+		UI.Round(base)
+		UI.Stroke(base, C.Ink, 3, 0)
+		local face = UI.Make("Frame", {
+			Name = "Face",
+			BackgroundColor3 = fill,
+			BorderSizePixel = 0,
+			Size = UDim2.fromOffset(size, size),
+			ZIndex = 2,
+			Parent = b,
+		})
+		UI.Round(face)
+		UI.Stroke(face, C.Ink, 3, 0)
+		UI.Shade(face)
+		local gloss = UI.Make("Frame", {
+			Name = "Gloss",
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BackgroundTransparency = 0.8,
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, math.floor(size * 0.09)),
+			Size = UDim2.fromScale(0.6, 0.28),
+			ZIndex = 2,
+			Parent = face,
+		})
+		UI.Round(gloss)
+		UI.Text({
+			Name = "Label",
+			Text = text,
+			Font = Theme.Fonts.Heading,
+			TextSize = textSize,
+			TextWrapped = false,
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 3,
+			Stroke = 2.5,
+			StrokeColor = Theme.Darken(lipColor, 0.45),
+			Parent = face,
+		})
+		-- nur Optik: Flaeche beim Druecken auf die Lippe absenken
+		local function press(down: boolean)
+			UI.Tween(face, 0.06, { Position = UDim2.fromOffset(0, if down then lip - 1 else 0) }, Enum.EasingStyle.Quad)
+		end
+		b.MouseButton1Down:Connect(function()
+			press(true)
+		end)
+		b.MouseButton1Up:Connect(function()
+			press(false)
+		end)
+		b.MouseLeave:Connect(function()
+			press(false)
+		end)
 		return b
 	end
-	local attack = round("👊", 110, UDim2.fromOffset(140, 100), Theme.Gradients.Danger)
-	local block = round("🛡️", 76, UDim2.fromOffset(40, 140), Theme.Gradients.Main)
-	local dash = round("💨", 76, UDim2.fromOffset(160, 0), ColorSequence.new(Theme.Colors.Cyan, Theme.Colors.Purple))
+	local attack = round("ATTACK", 112, UDim2.fromOffset(140, 96), C.Red, C.RedDark, 22)
+	local block = round("BLOCK", 80, UDim2.fromOffset(36, 132), C.Blue, C.BlueDark, 17)
+	local dash = round("DASH", 80, UDim2.fromOffset(170, 0), C.Grey, C.GreyDark, 17)
 	attack.MouseButton1Down:Connect(function()
 		mouseDown = true
 		Combat.M1()

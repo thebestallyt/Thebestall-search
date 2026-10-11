@@ -1,0 +1,67 @@
+{
+  "name": "NovaClash",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      }
+    },
+
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+
+    "StarterPlayer": {
+      "$properties": {
+        "CameraMaxZoomDistance": 45,
+        "CameraMinZoomDistance": 6,
+        "CharacterWalkSpeed": 18,
+        "CharacterUseJumpPower": true,
+        "CharacterJumpPower": 52,
+        "EnableMouseLockOption": true
+      },
+      "StarterPlayerScripts": {
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    },
+
+    "Players": {
+      "$properties": {
+        "RespawnTime": 3
+      }
+    },
+
+    "Workspace": {
+      "$properties": {
+        "StreamingEnabled": false,
+        "FallenPartsDestroyHeight": -120,
+        "Gravity": 196.2
+      }
+    },
+
+    "Lighting": {
+      "$properties": {
+        "Technology": "Future",
+        "ClockTime": 0.5,
+        "Brightness": 2,
+        "EnvironmentDiffuseScale": 0.6,
+        "EnvironmentSpecularScale": 1,
+        "GlobalShadows": true,
+        "Ambient": [0.12, 0.1, 0.2],
+        "OutdoorAmbient": [0.32, 0.26, 0.48]
+      }
+    },
+
+    "SoundService": {
+      "$properties": {
+        "RespectFilteringEnabled": true
+      }
+    }
+  }
+}

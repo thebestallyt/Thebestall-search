@@ -1,4 +1,6 @@
--- UI-Bausteine: Panels, animierte Buttons, Fenster, Zaehler, UI-Partikel.
+-- UI-Bausteine im "Chunky Game UI"-Stil (siehe Theme.luau):
+-- Panels mit dicken Umrissen, 3D-Buttons mit Lippe, Fenster mit farbiger Kopfleiste,
+-- Faehigkeits-Kacheln, Fortschrittsbalken, Tabs, Konfetti, Zaehler.
 
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
@@ -10,6 +12,8 @@ local UserInputService = game:GetService("UserInputService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Make = require(Shared:WaitForChild("Make"))
 local Signal = require(Shared:WaitForChild("Signal"))
+local Abilities = require(Shared:WaitForChild("Abilities"))
+local Rarities = require(Shared:WaitForChild("Rarities"))
 
 local UIFolder = script.Parent :: Instance
 local Theme = require(UIFolder:WaitForChild("Theme"))
@@ -24,6 +28,7 @@ UI.Theme = Theme
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local C = Theme.Colors
+local F = Theme.Fonts
 
 -- Allgemein ----------------------------------------------------------------
 
@@ -41,10 +46,11 @@ function UI.Sound(name: string, pitch: number?)
 	Effects.Sound(name, nil, { Pitch = pitch or 1, Variance = 0.02 })
 end
 
+-- 12345 -> "12,345"
 function UI.Format(n: number): string
 	local s = tostring(math.floor(n))
-	local formatted = s:reverse():gsub("(%d%d%d)", "%1."):reverse()
-	if formatted:sub(1, 1) == "." then
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
 		formatted = formatted:sub(2)
 	end
 	return formatted
@@ -65,7 +71,8 @@ function UI.Screen(name: string, displayOrder: number): ScreenGui
 	})
 end
 
--- Globale Skalierung je nach Bildschirmgroesse
+-- Globale Skalierung je nach Bildschirmgroesse --------------------------------------
+
 UI.ScaleChanged = Signal.new()
 UI.Scale = 1
 local scaled: { UIScale } = {}
@@ -92,6 +99,7 @@ local function updateScale()
 	UI.ScaleChanged:Fire(UI.Scale)
 end
 
+-- Haengt eine UIScale an, die der Bildschirmgroesse folgt
 function UI.Scaled(obj: GuiObject): UIScale
 	local s = Make("UIScale", { Name = "AutoScale", Scale = UI.Scale, Parent = obj })
 	table.insert(scaled, s)
@@ -106,10 +114,10 @@ task.defer(function()
 	end
 end)
 
--- Dekoration ------------------------------------------------------------------
+-- Dekoration --------------------------------------------------------------------
 
 function UI.Corner(parent: Instance, radius: number?): UICorner
-	return Make("UICorner", { CornerRadius = UDim.new(0, radius or 12), Parent = parent })
+	return Make("UICorner", { CornerRadius = UDim.new(0, radius or Theme.Radius), Parent = parent })
 end
 
 function UI.Round(parent: Instance): UICorner
@@ -118,11 +126,23 @@ end
 
 function UI.Stroke(parent: Instance, color: Color3?, thickness: number?, transparency: number?): UIStroke
 	return Make("UIStroke", {
-		Color = color or C.Stroke,
-		Thickness = thickness or 2,
+		Color = color or C.Ink,
+		Thickness = thickness or Theme.Outline,
 		Transparency = transparency or 0,
 		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		LineJoinMode = Enum.LineJoinMode.Round,
 		Parent = parent,
+	})
+end
+
+-- Text-Kontur (fuer gut lesbaren Text ueber der Welt)
+function UI.TextStroke(label: Instance, thickness: number?, color: Color3?): UIStroke
+	return Make("UIStroke", {
+		Color = color or C.Ink,
+		Thickness = thickness or 2,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
+		LineJoinMode = Enum.LineJoinMode.Round,
+		Parent = label,
 	})
 end
 
@@ -133,6 +153,11 @@ function UI.Gradient(parent: Instance, color: ColorSequence?, rotation: number?,
 		Transparency = transparency or NumberSequence.new(0),
 		Parent = parent,
 	})
+end
+
+-- Dezente Licht-von-oben-Schattierung auf farbigen Flaechen
+function UI.Shade(parent: Instance, soft: boolean?): UIGradient
+	return UI.Gradient(parent, if soft then Theme.Gradients.SoftShade else Theme.Gradients.Shade, 90)
 end
 
 function UI.Padding(parent: Instance, px: number)
@@ -156,10 +181,13 @@ function UI.List(parent: Instance, horizontal: boolean?, padding: number?, hAlig
 	})
 end
 
+-- Text ------------------------------------------------------------------------------
+-- Zusatz-Props: Stroke = Dicke der Textkontur (z.B. 2), StrokeColor = Farbe der Kontur
+
 function UI.Text(props: { [string]: any }): TextLabel
 	local label = Make("TextLabel", {
 		BackgroundTransparency = 1,
-		Font = Theme.Fonts.Bold,
+		Font = F.Bold,
 		TextColor3 = C.Text,
 		TextSize = 18,
 		Text = "",
@@ -167,37 +195,100 @@ function UI.Text(props: { [string]: any }): TextLabel
 		RichText = true,
 	})
 	for k, v in props do
-		if k ~= "Parent" then
+		if k ~= "Parent" and k ~= "Stroke" and k ~= "StrokeColor" then
 			(label :: any)[k] = v
 		end
+	end
+	if props.Stroke then
+		UI.TextStroke(label, props.Stroke, props.StrokeColor)
 	end
 	label.Parent = props.Parent
 	return label
 end
 
--- Panel mit Verlauf und leuchtendem Rand
+-- Panels ---------------------------------------------------------------------------
+-- Zusatz-Props: Color (Color3), Radius, NoStroke, StrokeColor (Color3), NoShade
+
 function UI.Panel(props: { [string]: any }): Frame
 	local frame = Make("Frame", {
-		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundColor3 = props.Color or C.Panel,
 		BorderSizePixel = 0,
 	})
 	for k, v in props do
-		if k ~= "Parent" and k ~= "StrokeColor" and k ~= "Radius" and k ~= "NoStroke" then
+		if k ~= "Parent" and k ~= "StrokeColor" and k ~= "Radius" and k ~= "NoStroke" and k ~= "Color" and k ~= "NoShade" then
 			(frame :: any)[k] = v
 		end
 	end
-	UI.Gradient(frame, Theme.Gradients.Panel, 90)
-	UI.Corner(frame, props.Radius or 16)
+	UI.Corner(frame, props.Radius or Theme.Radius)
+	if not props.NoShade then
+		UI.Shade(frame, true)
+	end
 	if not props.NoStroke then
-		local stroke = UI.Stroke(frame, Color3.new(1, 1, 1), 2, 0.25)
-		local g = UI.Gradient(stroke, props.StrokeColor or Theme.Gradients.Main, 45)
-		UI.Animate(g, 40, "Rotate")
+		local strokeColor = props.StrokeColor
+		if typeof(strokeColor) == "ColorSequence" then
+			strokeColor = (strokeColor :: ColorSequence).Keypoints[1].Value
+		end
+		UI.Stroke(frame, strokeColor or C.Ink, Theme.Outline, 0)
 	end
 	frame.Parent = props.Parent
 	return frame
 end
 
--- Animierte Verlaeufe (ein gemeinsamer Loop) ------------------------------------
+-- Erhobene Karte innerhalb eines Panels
+function UI.Card(props: { [string]: any }): Frame
+	props.Color = props.Color or C.PanelLight
+	props.Radius = props.Radius or 10
+	return UI.Panel(props)
+end
+
+-- Vertiefte Flaeche (Slots, Listen)
+function UI.Inset(props: { [string]: any }): Frame
+	props.Color = props.Color or C.PanelDark
+	props.NoShade = true
+	local f = UI.Panel(props)
+	local stroke = f:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Thickness = 2
+		stroke.Transparency = 0.3
+	end
+	return f
+end
+
+-- Schlagschatten hinter einem Element (als Geschwister, folgt Position/Groesse)
+function UI.Shadow(target: GuiObject, offset: number?, transparency: number?): Frame
+	local o = offset or 6
+	local shadow = Make("Frame", {
+		Name = target.Name .. "_Shadow",
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = transparency or 0.55,
+		BorderSizePixel = 0,
+		ZIndex = target.ZIndex - 1,
+	})
+	local corner = target:FindFirstChildOfClass("UICorner")
+	if corner then
+		Make("UICorner", { CornerRadius = corner.CornerRadius, Parent = shadow })
+	end
+	local function sync()
+		shadow.AnchorPoint = target.AnchorPoint
+		shadow.Size = target.Size
+		shadow.Position = target.Position + UDim2.fromOffset(0, o)
+		shadow.Visible = target.Visible
+		shadow.LayoutOrder = target.LayoutOrder
+	end
+	sync()
+	for _, prop in { "Position", "Size", "AnchorPoint", "Visible" } do
+		target:GetPropertyChangedSignal(prop):Connect(sync)
+	end
+	target.AncestryChanged:Connect(function()
+		if not target.Parent then
+			shadow:Destroy()
+		end
+	end)
+	shadow.Parent = target.Parent
+	return shadow
+end
+
+-- Animierte Verlaeufe (ein gemeinsamer Loop) ----------------------------------------
 
 type GradAnim = { g: UIGradient, speed: number, mode: string }
 local gradAnims: { GradAnim } = {}
@@ -223,44 +314,37 @@ RunService.RenderStepped:Connect(function(dt)
 	end
 end)
 
--- Buttons -----------------------------------------------------------------------
-
-local STYLES = {
-	Primary = { Gradient = Theme.Gradients.Main, Text = Color3.new(1, 1, 1), Shine = true },
-	Gold = { Gradient = Theme.Gradients.Gold, Text = Color3.fromRGB(60, 30, 0), Shine = true },
-	Robux = { Gradient = Theme.Gradients.Robux, Text = Color3.new(1, 1, 1), Shine = true },
-	Danger = { Gradient = Theme.Gradients.Danger, Text = Color3.new(1, 1, 1), Shine = false },
-	Success = { Gradient = Theme.Gradients.Success, Text = Color3.fromRGB(10, 40, 20), Shine = true },
-	Secondary = { Gradient = ColorSequence.new(C.PanelLighter, C.PanelLight), Text = C.Text, Shine = false },
-	Ghost = { Gradient = ColorSequence.new(C.Panel), Text = C.SubText, Shine = false },
-}
-
+-- Glanz, der ueber ein Element huscht (sparsam einsetzen: nur PLAY / Premium)
 function UI.Shine(button: GuiObject, interval: number?)
+	local holder = button:FindFirstChild("Face") or button
 	local shine = Make("Frame", {
 		Name = "Shine",
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
-		Size = UDim2.new(0.25, 0, 2, 0),
+		Size = UDim2.new(0.18, 0, 2, 0),
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(-0.3, 0.5),
-		Rotation = 20,
-		BackgroundTransparency = 0.75,
-		ZIndex = button.ZIndex + 2,
-		Parent = button,
+		Rotation = 18,
+		BackgroundTransparency = 0.7,
+		ZIndex = (holder :: GuiObject).ZIndex + 1,
+		Parent = holder,
 	})
 	UI.Gradient(shine, nil, 0, NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.5, 0.2),
+		NumberSequenceKeypoint.new(0.5, 0.35),
 		NumberSequenceKeypoint.new(1, 1),
 	}))
 	task.spawn(function()
 		while shine.Parent do
 			shine.Position = UDim2.fromScale(-0.3, 0.5)
-			UI.Tween(shine, 0.7, { Position = UDim2.fromScale(1.3, 0.5) }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
-			task.wait((interval or 2.6) + math.random() * 0.8)
+			UI.Tween(shine, 0.6, { Position = UDim2.fromScale(1.3, 0.5) }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+			task.wait((interval or 3.2) + math.random() * 1.2)
 		end
 	end)
 end
+
+-- 3D-Buttons ----------------------------------------------------------------------------
+-- Aufbau: TextButton (unsichtbar)  ->  "Lip" (dunkle Unterkante)  +  "Face" (Farbflaeche) -> "Label"
 
 export type ButtonProps = {
 	Text: string?,
@@ -275,88 +359,370 @@ export type ButtonProps = {
 	Font: Enum.Font?,
 	ZIndex: number?,
 	Name: string?,
+	Shine: boolean?,
+	Lip: number?,
 }
 
+local function styleOf(name: string?): { Fill: Color3, Lip: Color3 }
+	return Theme.ButtonStyles[name or "Green"] or Theme.ButtonStyles.Green
+end
+
 function UI.Button(props: ButtonProps): TextButton
-	local style = STYLES[props.Style or "Primary"] or STYLES.Primary
+	local style = styleOf(props.Style)
+	local lipH = props.Lip or Theme.Lip
+	local z = props.ZIndex or 1
 	local button = Make("TextButton", {
 		Name = props.Name or "Button",
 		AutoButtonColor = false,
-		BackgroundColor3 = Color3.new(1, 1, 1),
-		BorderSizePixel = 0,
+		BackgroundTransparency = 1,
 		Text = "",
-		Size = props.Size or UDim2.fromOffset(200, 54),
+		Size = props.Size or UDim2.fromOffset(200, 56),
 		Position = props.Position or UDim2.new(),
 		AnchorPoint = props.AnchorPoint or Vector2.zero,
 		LayoutOrder = props.LayoutOrder or 0,
-		ClipsDescendants = true,
-		ZIndex = props.ZIndex or 1,
+		ZIndex = z,
 	})
-	local grad = UI.Gradient(button, style.Gradient, 0)
-	UI.Corner(button, 12)
-	local stroke = UI.Stroke(button, Color3.new(1, 1, 1), 2, 0.65)
-	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	local lip = Make("Frame", {
+		Name = "Lip",
+		BackgroundColor3 = style.Lip,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(0, lipH),
+		Size = UDim2.new(1, 0, 1, -lipH),
+		ZIndex = z,
+		Parent = button,
+	})
+	UI.Corner(lip, 12)
+	UI.Stroke(lip, C.Ink, 2.5, 0)
+	local face = Make("Frame", {
+		Name = "Face",
+		BackgroundColor3 = style.Fill,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 1, -lipH),
+		ZIndex = z + 1,
+		ClipsDescendants = true,
+		Parent = button,
+	})
+	UI.Corner(face, 12)
+	UI.Stroke(face, C.Ink, 2.5, 0)
+	UI.Shade(face)
+	-- Glanzkante oben
+	local gloss = Make("Frame", {
+		Name = "Gloss",
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0.82,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 5, 0, 4),
+		Size = UDim2.new(1, -10, 0.38, 0),
+		ZIndex = z + 1,
+		Parent = face,
+	})
+	UI.Corner(gloss, 8)
 	local label = UI.Text({
 		Name = "Label",
 		Size = UDim2.fromScale(1, 1),
 		Text = props.Text or "",
-		TextColor3 = style.Text,
 		TextSize = props.TextSize or 22,
-		Font = props.Font or Theme.Fonts.Title,
-		ZIndex = button.ZIndex + 1,
-		Parent = button,
+		Font = props.Font or F.Heading,
+		TextWrapped = false,
+		ZIndex = z + 2,
+		Stroke = 2,
+		StrokeColor = Theme.Darken(style.Lip, 0.45),
+		Parent = face,
 	})
-	local _ = grad
-	local scale = Make("UIScale", { Parent = button })
-	if style.Shine then
+	local _ = label
+	if props.Shine then
 		UI.Shine(button)
 	end
+
+	local hovering = false
+	local function setPressed(pressed: boolean)
+		UI.Tween(face, 0.07, { Position = UDim2.fromOffset(0, if pressed then lipH - 1 else 0) }, Enum.EasingStyle.Quad)
+	end
 	button.MouseEnter:Connect(function()
-		UI.Tween(scale, 0.15, { Scale = 1.06 })
-		UI.Tween(stroke, 0.15, { Transparency = 0.1 })
+		hovering = true
+		local s = styleOf(button:GetAttribute("Style") or props.Style)
+		UI.Tween(face, 0.12, { BackgroundColor3 = Theme.Lighten(s.Fill, 0.14) })
 		UI.Sound("Hover")
 	end)
 	button.MouseLeave:Connect(function()
-		UI.Tween(scale, 0.2, { Scale = 1 })
-		UI.Tween(stroke, 0.2, { Transparency = 0.65 })
+		hovering = false
+		local s = styleOf(button:GetAttribute("Style") or props.Style)
+		UI.Tween(face, 0.15, { BackgroundColor3 = s.Fill })
+		setPressed(false)
 	end)
 	button.MouseButton1Down:Connect(function()
-		UI.Tween(scale, 0.08, { Scale = 0.93 })
+		setPressed(true)
 	end)
 	button.MouseButton1Up:Connect(function()
-		UI.Tween(scale, 0.15, { Scale = 1.04 }, Enum.EasingStyle.Back)
+		setPressed(false)
 	end)
 	button.Activated:Connect(function()
+		if button:GetAttribute("Disabled") then
+			UI.Shake(button)
+			return
+		end
 		UI.Sound("Click")
+		if not hovering then
+			setPressed(true)
+			task.delay(0.08, function()
+				setPressed(false)
+			end)
+		end
 		if props.OnClick then
 			task.spawn(props.OnClick)
 		end
 	end)
+	button:SetAttribute("Style", props.Style or "Green")
 	button.Parent = props.Parent
-	local __ = label
 	return button
 end
 
+local function labelOf(button: Instance): TextLabel?
+	local face = button:FindFirstChild("Face")
+	local label = (face and face:FindFirstChild("Label")) or button:FindFirstChild("Label", true)
+	return if label and label:IsA("TextLabel") then label else nil
+end
+
 function UI.SetButtonText(button: GuiObject, text: string)
-	local label = button:FindFirstChild("Label")
-	if label and label:IsA("TextLabel") then
+	local label = labelOf(button)
+	if label then
 		label.Text = text
 	end
 end
 
 function UI.SetButtonStyle(button: GuiObject, styleName: string)
-	local style = STYLES[styleName]
-	local g = button:FindFirstChildOfClass("UIGradient")
-	local label = button:FindFirstChild("Label")
-	if style and g then
-		g.Color = style.Gradient
+	local style = Theme.ButtonStyles[styleName]
+	if not style then
+		return
 	end
-	if style and label and label:IsA("TextLabel") then
-		label.TextColor3 = style.Text
+	button:SetAttribute("Style", styleName)
+	local face = button:FindFirstChild("Face")
+	local lip = button:FindFirstChild("Lip")
+	if face and face:IsA("Frame") then
+		face.BackgroundColor3 = style.Fill
+	end
+	if lip and lip:IsA("Frame") then
+		lip.BackgroundColor3 = style.Lip
+	end
+	local label = labelOf(button)
+	local stroke = label and label:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Color = Theme.Darken(style.Lip, 0.45)
 	end
 end
 
--- Animationen -------------------------------------------------------------------
+-- Deaktiviert = grau, Klick wackelt nur
+function UI.SetButtonEnabled(button: GuiObject, enabled: boolean, enabledStyle: string?)
+	button:SetAttribute("Disabled", not enabled)
+	if enabled then
+		local saved = button:GetAttribute("EnabledStyle")
+		UI.SetButtonStyle(button, enabledStyle or (if type(saved) == "string" then saved else "Green"))
+	else
+		if not button:GetAttribute("EnabledStyle") then
+			button:SetAttribute("EnabledStyle", button:GetAttribute("Style"))
+		end
+		UI.SetButtonStyle(button, "Grey")
+	end
+end
+
+-- Quadratischer Icon-Button (z.B. HUD-Menue): grosses Symbol + kleine Beschriftung
+function UI.IconButton(props: { Icon: string, Caption: string?, Style: string?, Size: number?, Parent: Instance?, LayoutOrder: number?, Name: string?, OnClick: (() -> ())? }): TextButton
+	local size = props.Size or 76
+	local button = UI.Button({
+		Name = props.Name,
+		Text = "",
+		Style = props.Style or "Dark",
+		Size = UDim2.fromOffset(size, size),
+		LayoutOrder = props.LayoutOrder,
+		Parent = props.Parent,
+		OnClick = props.OnClick,
+	})
+	local face = button:FindFirstChild("Face") :: Frame
+	UI.Text({
+		Name = "Icon",
+		Text = props.Icon,
+		TextSize = math.floor(size * 0.42),
+		Font = F.Heading,
+		Position = UDim2.fromOffset(0, if props.Caption then -4 else 0),
+		Size = UDim2.fromScale(1, if props.Caption then 0.78 else 1),
+		ZIndex = face.ZIndex + 1,
+		Parent = face,
+	})
+	if props.Caption then
+		UI.Text({
+			Name = "Caption",
+			Text = props.Caption,
+			TextSize = math.max(10, math.floor(size * 0.15)),
+			Font = F.Heading,
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 0, 1, -3),
+			Size = UDim2.new(1, 0, 0, math.floor(size * 0.22)),
+			TextWrapped = false,
+			ZIndex = face.ZIndex + 1,
+			Stroke = 1.5,
+			Parent = face,
+		})
+	end
+	return button
+end
+
+-- Faehigkeits-Kachel ---------------------------------------------------------------------
+-- Farbige Kachel in Seltenheitsfarbe mit dunkler Lippe und dem Symbol der Faehigkeit.
+
+function UI.AbilityTile(props: { AbilityId: string?, Size: number, Parent: Instance?, LayoutOrder: number?, Locked: boolean?, Position: UDim2? }): Frame
+	local def = Abilities.Get(props.AbilityId)
+	local size = props.Size
+	local lipH = math.max(3, math.floor(size * 0.06))
+	local rarity = if def then Rarities.Get(def.Rarity) else nil
+	local fill = if rarity and not props.Locked then rarity.Color else C.Grey
+	local holder = Make("Frame", {
+		Name = "AbilityTile",
+		BackgroundTransparency = 1,
+		Size = UDim2.fromOffset(size, size),
+		Position = props.Position or UDim2.new(),
+		LayoutOrder = props.LayoutOrder or 0,
+	})
+	local lip = Make("Frame", {
+		Name = "Lip",
+		BackgroundColor3 = Theme.Darken(fill, 0.45),
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(0, lipH),
+		Size = UDim2.new(1, 0, 1, -lipH),
+		Parent = holder,
+	})
+	UI.Corner(lip, math.floor(size * 0.18))
+	UI.Stroke(lip, C.Ink, 2.5, 0)
+	local face = Make("Frame", {
+		Name = "Face",
+		BackgroundColor3 = fill,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 1, -lipH),
+		ZIndex = 2,
+		ClipsDescendants = true,
+		Parent = holder,
+	})
+	UI.Corner(face, math.floor(size * 0.18))
+	UI.Stroke(face, C.Ink, 2.5, 0)
+	UI.Gradient(face, ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(170, 170, 170)), 90)
+	-- dunkler Kreis hinter dem Symbol fuer Tiefe
+	local disc = Make("Frame", {
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.78,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.52),
+		Size = UDim2.fromScale(0.74, 0.74),
+		ZIndex = 2,
+		Parent = face,
+	})
+	UI.Round(disc)
+	UI.Text({
+		Name = "Icon",
+		Text = if def and not props.Locked then def.Icon else "?",
+		Font = F.Heading,
+		TextSize = math.floor(size * 0.48),
+		TextColor3 = if props.Locked then C.Muted else C.Text,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 3,
+		Parent = face,
+	})
+	holder.Parent = props.Parent
+	return holder
+end
+
+-- Fortschrittsbalken ----------------------------------------------------------------------
+
+export type Bar = { Frame: Frame, Fill: Frame, Trail: Frame, Label: TextLabel, Set: (ratio: number, instant: boolean?) -> () }
+
+function UI.ProgressBar(props: { Size: UDim2, Position: UDim2?, AnchorPoint: Vector2?, Color: Color3?, Parent: Instance?, Text: string? }): Bar
+	local frame = Make("Frame", {
+		BackgroundColor3 = C.PanelDark,
+		BorderSizePixel = 0,
+		Size = props.Size,
+		Position = props.Position or UDim2.new(),
+		AnchorPoint = props.AnchorPoint or Vector2.zero,
+		Parent = props.Parent,
+	})
+	UI.Round(frame)
+	UI.Stroke(frame, C.Ink, 2.5, 0)
+	local trail = Make("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), Parent = frame })
+	UI.Round(trail)
+	local fill = Make("Frame", { BackgroundColor3 = props.Color or C.Green, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), Parent = frame })
+	UI.Round(fill)
+	UI.Shade(fill)
+	local gloss = Make("Frame", {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0.75,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 4, 0, 3),
+		Size = UDim2.new(1, -8, 0.3, 0),
+		Parent = fill,
+	})
+	UI.Round(gloss)
+	local label = UI.Text({
+		Text = props.Text or "",
+		Font = F.Heading,
+		TextSize = 16,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 3,
+		Stroke = 2,
+		Parent = frame,
+	})
+	local function set(ratio: number, instant: boolean?)
+		local r = math.clamp(ratio, 0, 1)
+		if instant then
+			fill.Size = UDim2.fromScale(r, 1)
+			trail.Size = UDim2.fromScale(r, 1)
+			return
+		end
+		local shrinking = r < fill.Size.X.Scale
+		UI.Tween(fill, 0.15, { Size = UDim2.fromScale(r, 1) })
+		if shrinking then
+			UI.Tween(trail, 0.45, { Size = UDim2.fromScale(r, 1) }, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0.3)
+		else
+			trail.Size = UDim2.fromScale(r, 1)
+		end
+	end
+	return { Frame = frame, Fill = fill, Trail = trail, Label = label, Set = set }
+end
+
+-- Tabs ----------------------------------------------------------------------------------
+
+function UI.Tabs(props: { Tabs: { string }, Parent: Instance, Position: UDim2?, Size: UDim2?, OnSelect: (string) -> (), Style: string? }): Frame
+	local holder = Make("Frame", {
+		BackgroundTransparency = 1,
+		Position = props.Position or UDim2.new(),
+		Size = props.Size or UDim2.new(1, 0, 0, 50),
+		Parent = props.Parent,
+	})
+	UI.List(holder, true, 10)
+	local buttons: { [string]: TextButton } = {}
+	local function select(name: string)
+		for n, b in buttons do
+			UI.SetButtonStyle(b, if n == name then (props.Style or "Blue") else "Dark")
+		end
+		props.OnSelect(name)
+	end
+	for i, name in props.Tabs do
+		local b = UI.Button({
+			Text = name,
+			Style = "Dark",
+			Size = UDim2.fromOffset(math.max(120, #name * 13 + 40), 46),
+			TextSize = 18,
+			LayoutOrder = i,
+			Parent = holder,
+			OnClick = function()
+				select(name)
+			end,
+		})
+		buttons[name] = b
+	end
+	if props.Tabs[1] then
+		task.defer(select, props.Tabs[1])
+	end
+	return holder
+end
+
+-- Animationen ---------------------------------------------------------------------------
 
 function UI.Pop(obj: GuiObject, from: number?, time: number?)
 	local s = obj:FindFirstChild("PopScale") :: UIScale?
@@ -365,7 +731,7 @@ function UI.Pop(obj: GuiObject, from: number?, time: number?)
 	end
 	local sc = s :: UIScale
 	sc.Scale = from or 0.5
-	UI.Tween(sc, time or 0.45, { Scale = 1 }, Enum.EasingStyle.Back)
+	UI.Tween(sc, time or 0.4, { Scale = 1 }, Enum.EasingStyle.Back)
 end
 
 function UI.Shake(obj: GuiObject)
@@ -396,33 +762,33 @@ function UI.CountTo(label: TextLabel, from: number, to: number, time: number, fm
 	end)
 end
 
--- Schwebende Partikel im Hintergrund (Sterne / Funken)
+-- Langsam aufsteigende Staubkoernchen im Hintergrund (sehr dezent)
 function UI.Ambient(container: Instance, opts: { [string]: any }?): () -> ()
 	local o = opts or {}
 	local running = true
-	local colors: { Color3 } = o.Colors or { C.Cyan, C.Magenta, C.Purple, Color3.new(1, 1, 1) }
+	local colors: { Color3 } = o.Colors or { Color3.new(1, 1, 1) }
 	task.spawn(function()
 		while running and container.Parent do
-			local size = math.random(o.MinSize or 2, o.MaxSize or 6)
+			local size = math.random(o.MinSize or 2, o.MaxSize or 4)
 			local dot = Make("Frame", {
 				BackgroundColor3 = colors[math.random(1, #colors)],
 				BorderSizePixel = 0,
 				Size = UDim2.fromOffset(size, size),
 				Position = UDim2.fromScale(math.random(), 1.05),
-				BackgroundTransparency = 0.2,
+				BackgroundTransparency = o.Transparency or 0.6,
 				ZIndex = o.ZIndex or 1,
 				Parent = container,
 			})
 			UI.Round(dot)
-			local life = math.random(40, 90) / 10
+			local life = math.random(60, 110) / 10
 			UI.Tween(dot, life, {
-				Position = UDim2.fromScale(dot.Position.X.Scale + (math.random() - 0.5) * 0.15, -0.05),
+				Position = UDim2.fromScale(dot.Position.X.Scale + (math.random() - 0.5) * 0.1, -0.05),
 				BackgroundTransparency = 1,
 			}, Enum.EasingStyle.Linear)
 			task.delay(life, function()
 				dot:Destroy()
 			end)
-			task.wait(o.Interval or 0.12)
+			task.wait(o.Interval or 0.25)
 		end
 	end)
 	return function()
@@ -433,22 +799,23 @@ end
 -- Konfetti-Explosion von einem Punkt aus
 function UI.Burst(container: Instance, at: UDim2, colors: { Color3 }, count: number, spread: number?)
 	for _ = 1, count do
-		local s = math.random(5, 12)
+		local s = math.random(6, 12)
 		local piece = Make("Frame", {
 			BackgroundColor3 = colors[math.random(1, #colors)],
 			BorderSizePixel = 0,
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Size = UDim2.fromOffset(s, s * (if math.random() > 0.5 then 2 else 1)),
+			Size = UDim2.fromOffset(s, s * (if math.random() > 0.5 then 1.8 else 1)),
 			Position = at,
 			Rotation = math.random(0, 360),
 			ZIndex = 20,
 			Parent = container,
 		})
+		UI.Stroke(piece, C.Ink, 1.5, 0.2)
 		local ang = math.random() * math.pi * 2
 		local dist = math.random(80, spread or 380)
-		local life = math.random(6, 12) / 10
+		local life = math.random(7, 13) / 10
 		UI.Tween(piece, life, {
-			Position = at + UDim2.fromOffset(math.cos(ang) * dist, math.sin(ang) * dist + 60),
+			Position = at + UDim2.fromOffset(math.cos(ang) * dist, math.sin(ang) * dist + 90),
 			Rotation = piece.Rotation + math.random(-360, 360),
 			BackgroundTransparency = 1,
 		}, Enum.EasingStyle.Quart)
@@ -458,21 +825,23 @@ function UI.Burst(container: Instance, at: UDim2, colors: { Color3 }, count: num
 	end
 end
 
--- Weichzeichner hinter Fenstern ---------------------------------------------------
+-- Weichzeichner hinter Fenstern ---------------------------------------------------------
 
 local blur = Lighting:FindFirstChild("NovaUIBlur") or Make("BlurEffect", { Name = "NovaUIBlur", Size = 0, Parent = Lighting })
 local blurUsers = 0
 
 function UI.SetBlur(on: boolean)
 	blurUsers = math.max(0, blurUsers + (if on then 1 else -1))
-	UI.Tween(blur, 0.3, { Size = if blurUsers > 0 then 14 else 0 })
+	UI.Tween(blur, 0.3, { Size = if blurUsers > 0 then 12 else 0 })
 end
 
--- Fenster -------------------------------------------------------------------------
+-- Fenster -----------------------------------------------------------------------------
+-- Farbige Kopfleiste (opts.Color), roter X-Knopf, Panel mit dickem Umriss + Schlagschatten.
 
 export type Window = {
 	Root: Frame,
 	Panel: Frame,
+	Header: Frame,
 	Content: Frame,
 	IsOpen: boolean,
 	Opened: any,
@@ -484,11 +853,12 @@ export type Window = {
 local windowsGui: ScreenGui? = nil
 local openWindows: { Window } = {}
 
-function UI.Window(opts: { Title: string, Icon: string?, Size: Vector2, Name: string }): Window
+function UI.Window(opts: { Title: string, Icon: string?, Size: Vector2, Name: string, Color: Color3? }): Window
 	if not windowsGui then
 		windowsGui = UI.Screen("NovaWindows", 20)
 	end
 	local gui = windowsGui :: ScreenGui
+	local headerColor = opts.Color or C.Blue
 	local root = Make("Frame", {
 		Name = opts.Name,
 		Size = UDim2.fromScale(1, 1),
@@ -497,75 +867,98 @@ function UI.Window(opts: { Title: string, Icon: string?, Size: Vector2, Name: st
 		Visible = false,
 		Parent = gui,
 	})
-	local panel = UI.Panel({
-		Name = "Panel",
+	local holder = Make("Frame", {
+		Name = "Holder",
+		BackgroundTransparency = 1,
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.52),
+		Position = UDim2.fromScale(0.5, 0.53),
 		Size = UDim2.fromOffset(opts.Size.X, opts.Size.Y),
 		Parent = root,
 	})
-	local autoScale = UI.Scaled(panel)
-	local _ = autoScale
-	local popScale = Make("UIScale", { Name = "PopScale", Parent = panel })
-
-	-- Kopfzeile
+	UI.Scaled(holder)
+	local popScale = Make("UIScale", { Name = "PopScale", Parent = holder })
+	-- Schatten
+	local shadow = Make("Frame", {
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.5,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(0, 10),
+		Size = UDim2.fromScale(1, 1),
+		Parent = holder,
+	})
+	UI.Corner(shadow, 18)
+	local panel = UI.Panel({
+		Name = "Panel",
+		Size = UDim2.fromScale(1, 1),
+		Radius = 18,
+		Parent = holder,
+	})
+	-- Kopfleiste
 	local header = Make("Frame", {
 		Name = "Header",
-		BackgroundTransparency = 1,
+		BackgroundColor3 = headerColor,
+		BorderSizePixel = 0,
 		Size = UDim2.new(1, 0, 0, 64),
 		Parent = panel,
 	})
-	local title = UI.Text({
-		Text = (if opts.Icon then opts.Icon .. "  " else "") .. opts.Title,
-		Font = Theme.Fonts.Title,
-		TextSize = 32,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Position = UDim2.fromOffset(26, 0),
-		Size = UDim2.new(1, -100, 1, 0),
-		Parent = header,
-	})
-	local tg = UI.Gradient(title, Theme.Gradients.Main, 0)
-	UI.Animate(tg, 0.25, "Offset")
-	local line = Make("Frame", {
-		BackgroundColor3 = Color3.new(1, 1, 1),
+	UI.Corner(header, 18)
+	UI.Shade(header)
+	-- untere Ecken der Kopfleiste eckig machen
+	Make("Frame", {
+		BackgroundColor3 = headerColor,
 		BorderSizePixel = 0,
-		Position = UDim2.new(0, 24, 1, -2),
-		Size = UDim2.new(1, -48, 0, 2),
+		Position = UDim2.new(0, 0, 1, -18),
+		Size = UDim2.new(1, 0, 0, 18),
 		Parent = header,
 	})
-	UI.Gradient(line, Theme.Gradients.Main, 0, NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(1, 1),
-	}))
+	Make("Frame", {
+		BackgroundColor3 = C.Ink,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 3),
+		Parent = header,
+	})
+	UI.Text({
+		Text = (if opts.Icon then opts.Icon .. "  " else "") .. opts.Title,
+		Font = F.Heading,
+		TextSize = 34,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Position = UDim2.fromOffset(24, 0),
+		Size = UDim2.new(1, -110, 1, 0),
+		TextWrapped = false,
+		Stroke = 3,
+		StrokeColor = Theme.Darken(headerColor, 0.55),
+		Parent = header,
+	})
 	local content = Make("Frame", {
 		Name = "Content",
 		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(0, 66),
-		Size = UDim2.new(1, 0, 1, -66),
+		Position = UDim2.fromOffset(0, 70),
+		Size = UDim2.new(1, 0, 1, -70),
 		Parent = panel,
 	})
 
 	local win = {
 		Root = root,
 		Panel = panel,
+		Header = header,
 		Content = content,
 		IsOpen = false,
 		Opened = Signal.new(),
 		Closed = Signal.new(),
 	} :: any
 
-	local closeBtn = UI.Button({
-		Text = "✕",
-		Style = "Danger",
-		Size = UDim2.fromOffset(44, 44),
-		Position = UDim2.new(1, -60, 0, 12),
-		TextSize = 22,
+	UI.Button({
+		Text = "X",
+		Style = "Red",
+		Size = UDim2.fromOffset(50, 50),
+		Position = UDim2.new(1, -64, 0, 6),
+		TextSize = 26,
 		Parent = panel,
 		OnClick = function()
 			win:Close()
 		end,
 	})
-	local __ = closeBtn
 
 	function win.Open(self: Window)
 		if self.IsOpen then
@@ -578,9 +971,9 @@ function UI.Window(opts: { Title: string, Icon: string?, Size: Vector2, Name: st
 		table.insert(openWindows, self)
 		root.Visible = true
 		root.BackgroundTransparency = 1
-		UI.Tween(root, 0.25, { BackgroundTransparency = 0.45 })
-		popScale.Scale = 0.75
-		UI.Tween(popScale, 0.4, { Scale = 1 }, Enum.EasingStyle.Back)
+		UI.Tween(root, 0.2, { BackgroundTransparency = 0.5 })
+		popScale.Scale = 0.85
+		UI.Tween(popScale, 0.35, { Scale = 1 }, Enum.EasingStyle.Back)
 		UI.SetBlur(true)
 		UI.Sound("Open")
 		self.Opened:Fire()
@@ -595,11 +988,11 @@ function UI.Window(opts: { Title: string, Icon: string?, Size: Vector2, Name: st
 		if i then
 			table.remove(openWindows, i)
 		end
-		UI.Tween(root, 0.2, { BackgroundTransparency = 1 })
-		UI.Tween(popScale, 0.2, { Scale = 0.8 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		UI.Tween(root, 0.15, { BackgroundTransparency = 1 })
+		UI.Tween(popScale, 0.15, { Scale = 0.9 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 		UI.SetBlur(false)
 		UI.Sound("Close")
-		task.delay(0.2, function()
+		task.delay(0.15, function()
 			if not self.IsOpen then
 				root.Visible = false
 			end
@@ -611,7 +1004,7 @@ function UI.Window(opts: { Title: string, Icon: string?, Size: Vector2, Name: st
 	root.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			local pos = input.Position
-			local ap, as = panel.AbsolutePosition, panel.AbsoluteSize
+			local ap, as = holder.AbsolutePosition, holder.AbsoluteSize
 			if pos.X < ap.X or pos.X > ap.X + as.X or pos.Y < ap.Y or pos.Y > ap.Y + as.Y then
 				win:Close()
 			end
@@ -630,19 +1023,19 @@ function UI.AnyWindowOpen(): boolean
 	return #openWindows > 0
 end
 
-UserInputService.InputBegan:Connect(function(input, processed)
-	if input.KeyCode == Enum.KeyCode.Escape or (input.KeyCode == Enum.KeyCode.ButtonB and not processed) then
+UserInputService.InputBegan:Connect(function(input)
+	if input.KeyCode == Enum.KeyCode.Escape then
 		UI.CloseAllWindows()
 	end
 end)
 
--- Zentriertes Raster in einem ScrollingFrame
+-- Scroll-Bereich
 function UI.Scroll(parent: Instance, props: { [string]: any }): ScrollingFrame
 	local sf = Make("ScrollingFrame", {
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		ScrollBarThickness = 6,
-		ScrollBarImageColor3 = C.Purple,
+		ScrollBarThickness = 8,
+		ScrollBarImageColor3 = C.Line,
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		CanvasSize = UDim2.new(),
 		ScrollingDirection = Enum.ScrollingDirection.Y,
@@ -652,6 +1045,23 @@ function UI.Scroll(parent: Instance, props: { [string]: any }): ScrollingFrame
 	end
 	sf.Parent = parent
 	return sf
+end
+
+-- 3D-Vorschau in der UI (ViewportFrame + Kamera). Teile einfach in den Viewport parenten.
+function UI.Viewport(props: { Size: UDim2, Position: UDim2?, Parent: Instance?, CameraCFrame: CFrame?, FieldOfView: number? }): (ViewportFrame, Camera)
+	local vp = Make("ViewportFrame", {
+		BackgroundTransparency = 1,
+		Size = props.Size,
+		Position = props.Position or UDim2.new(),
+		Ambient = Color3.fromRGB(170, 170, 185),
+		LightColor = Color3.fromRGB(255, 248, 235),
+		LightDirection = Vector3.new(-1, -1.4, -0.8),
+		Parent = props.Parent,
+	})
+	local cam = Make("Camera", { FieldOfView = props.FieldOfView or 40, Parent = vp })
+	cam.CFrame = props.CameraCFrame or CFrame.lookAt(Vector3.new(0, 3, 10), Vector3.zero)
+	vp.CurrentCamera = cam
+	return vp, cam
 end
 
 return UI

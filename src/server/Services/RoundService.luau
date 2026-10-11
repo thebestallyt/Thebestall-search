@@ -32,6 +32,7 @@ local roundActive = false
 local eliminatedOrder: { Fighter } = {}
 local forceStart = false
 local forceEnd = false
+local botOnlyRound = false
 
 -- Admin: Runde sofort starten / beenden
 function RoundService.ForceStart()
@@ -63,6 +64,7 @@ local function snapshot(): { [string]: any }
 		Alive = #aliveParticipants(),
 		Total = #participants,
 		Fighters = fighters,
+		BotOnly = botOnlyRound,
 	}
 end
 
@@ -178,13 +180,15 @@ local function onFighterDied(victim: Fighter, killer: Fighter?)
 	broadcast()
 end
 
-local function runRound()
+local function runRound(botOnly: boolean)
 	participants = {}
 	eliminatedOrder = {}
+	botOnlyRound = botOnly
 	local spawns = shuffled(world.ArenaSpawns)
 	local index = 0
 
-	for _, player in readyPlayers() do
+	local joining: { Player } = if botOnly then {} else readyPlayers()
+	for _, player in joining do
 		local f = CombatService.GetFighterFromPlayer(player)
 		if f then
 			index += 1
@@ -199,8 +203,10 @@ local function runRound()
 		end
 	end
 
-	if RoundConfig.FillWithBots then
-		local need = math.min(RoundConfig.MinFighters - #participants, RoundConfig.MaxBots)
+	if RoundConfig.FillWithBots or botOnly then
+		local need = if botOnly
+			then RoundConfig.BotOnlyFighters
+			else math.min(RoundConfig.MinFighters - #participants, RoundConfig.MaxBots)
 		for _ = 1, need do
 			index += 1
 			local bot = BotService.SpawnArenaBot(spawns[((index - 1) % #spawns) + 1])
@@ -223,6 +229,15 @@ local function runRound()
 
 	roundActive = true
 	local players = participantPlayers()
+	if botOnly then
+		for _, p in Players:GetPlayers() do
+			Net.Event("Notify"):FireClient(p, {
+				Text = "Bot battle in the arena! Press SPECTATE to watch – a real round starts as soon as you're ready.",
+				Color = Color3.fromRGB(255, 200, 80),
+				Icon = "🤖",
+			})
+		end
+	end
 	setState("Countdown", RoundConfig.CountdownTime)
 	announceTo(players, { Text = "GET READY", Sub = #participants .. " fighters in the arena", Style = "Big", Duration = 1.6 })
 	task.wait(1.8)
@@ -239,24 +254,34 @@ local function runRound()
 	end
 	announceTo(players, { Text = "FIGHT!", Style = "Fight", Duration = 1.2 })
 
-	setState("Fighting", RoundConfig.RoundTime)
+	setState("Fighting", if botOnly then RoundConfig.BotOnlyRoundTime else RoundConfig.RoundTime)
 	forceEnd = false
+	local elapsed = 0
 	while timeLeft > 0 and not forceEnd do
 		local alive = aliveParticipants()
 		if #alive <= 1 then
 			break
 		end
-		-- Keine echten Spieler mehr uebrig -> Runde beenden
-		local realAlive = false
-		for _, f in alive do
-			if f.Player then
-				realAlive = true
+		if botOnly then
+			-- Ein Spieler ist bereit -> Bot-Runde abbrechen, damit er mitspielen kann
+			if elapsed >= 5 and #readyPlayers() >= RoundConfig.MinRealPlayers then
+				announceTo(nil, { Text = "A CHALLENGER APPEARS!", Sub = "Get ready – a new round is starting", Style = "Big", Duration = 2.5 })
+				break
+			end
+		else
+			-- Keine echten Spieler mehr uebrig -> Runde beenden
+			local realAlive = false
+			for _, f in alive do
+				if f.Player then
+					realAlive = true
+					break
+				end
+			end
+			if not realAlive then
 				break
 			end
 		end
-		if not realAlive then
-			break
-		end
+		elapsed += 1
 		task.wait(1)
 		timeLeft -= 1
 		broadcast()
@@ -313,7 +338,7 @@ local function runRound()
 		end
 	end
 
-	task.wait(RoundConfig.EndScreenTime)
+	task.wait(if botOnly then 3 else RoundConfig.EndScreenTime)
 	for _, f in participants do
 		if f.Player then
 			sendToLobby(f)
@@ -321,6 +346,7 @@ local function runRound()
 	end
 	BotService.ClearArenaBots()
 	participants = {}
+	botOnlyRound = false
 	broadcast()
 end
 
@@ -340,38 +366,44 @@ function RoundService.Start()
 	task.spawn(function()
 		while true do
 			local ready = readyPlayers()
-			if #ready < RoundConfig.MinRealPlayers and not (forceStart and #ready > 0) then
+			local enoughPlayers = #ready >= RoundConfig.MinRealPlayers or (forceStart and #ready > 0)
+			local canBotRound = RoundConfig.BotOnlyRounds and #Players:GetPlayers() > 0
+			if not enoughPlayers and not canBotRound and not forceStart then
 				if state ~= "Waiting" then
 					setState("Waiting")
 				end
 				task.wait(1)
 				continue
 			end
-			setState("Intermission", RoundConfig.IntermissionTime)
-			local aborted = false
+			-- Pause zwischen den Runden (bei Bot-Runden kuerzer)
+			setState("Intermission", if enoughPlayers then RoundConfig.IntermissionTime else RoundConfig.BotOnlyIntermission)
 			while timeLeft > 0 and not forceStart do
 				task.wait(1)
 				timeLeft -= 1
-				broadcast()
-				if #readyPlayers() < RoundConfig.MinRealPlayers and not forceStart then
-					aborted = true
-					break
+				-- Wird waehrend einer Bot-Pause jemand bereit -> volle Pause fuer echte Runde
+				if not enoughPlayers and #readyPlayers() >= RoundConfig.MinRealPlayers then
+					enoughPlayers = true
+					timeLeft = math.max(timeLeft, 10)
 				end
+				broadcast()
 			end
 			forceStart = false
-			if not aborted then
-				local ok, err = pcall(runRound)
-				if not ok then
-					warn("[RoundService] Fehler in der Runde: " .. tostring(err))
-					roundActive = false
-					for _, f in participants do
-						if f.Player then
-							pcall(sendToLobby, f)
-						end
+			local botOnly = #readyPlayers() < RoundConfig.MinRealPlayers
+			if botOnly and not RoundConfig.BotOnlyRounds then
+				continue
+			end
+			local ok, err = pcall(runRound, botOnly)
+			if not ok then
+				warn("[RoundService] Fehler in der Runde: " .. tostring(err))
+				roundActive = false
+				botOnlyRound = false
+				for _, f in participants do
+					if f.Player then
+						pcall(sendToLobby, f)
 					end
-					BotService.ClearArenaBots()
-					participants = {}
 				end
+				BotService.ClearArenaBots()
+				participants = {}
 			end
 		end
 	end)

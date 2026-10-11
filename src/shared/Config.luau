@@ -25,6 +25,12 @@ Config.Round = {
 	MinFighters = 3, -- wird mit Bots aufgefuellt bis zu dieser Anzahl
 	FillWithBots = true, -- Bots auffuellen wenn zu wenig Spieler da sind
 	MaxBots = 3,
+	-- Bot-Runden: Ist niemand bereit, kaempfen Bots gegeneinander (man kann zuschauen).
+	-- Sobald ein Spieler bereit ist, endet die Bot-Runde und eine echte Runde startet.
+	BotOnlyRounds = true,
+	BotOnlyFighters = 4,
+	BotOnlyRoundTime = 90,
+	BotOnlyIntermission = 8,
 }
 
 -- Belohnungen in Muenzen

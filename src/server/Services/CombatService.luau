@@ -124,9 +124,7 @@ function CombatService.CanAct(f: Fighter): boolean
 	if t < f.StunUntil or t < f.CastLockUntil then
 		return false
 	end
-	if f.Player and f.Player:GetAttribute("Busy") then
-		return false
-	end
+	-- Hinweis: "Busy" (Menue/Tutorial/Kiste) sperrt NICHT den Kampf, nur die Rundenteilnahme.
 	return true
 end
 

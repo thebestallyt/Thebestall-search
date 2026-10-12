@@ -2,8 +2,13 @@
 -- * Ein sonniges Tal aus Terrain: Wiesen, sanfte Huegel, ein See mit Bach und ringsum
 --   felsige Berge mit Schneekappen. Ueberall ist Boden - niemand faellt ins Leere.
 -- * Lobby: gemuetliches Lager-Dorf mit Kisten-Altar, Black-Hole-Schrein, Trainingsplatz,
---   Lagerfeuer, Zelten, Marktstaenden und kleinen Fachwerkhaeusern.
+--   Lagerfeuer, Zelten, Marktstaenden und Fachwerkhaeusern (alles in Menschen-Massstab,
+--   ein R15-Charakter ist ca. 5.5 Studs gross).
 -- * Arena: alte Steinruine (Kolosseum) im selben Tal, ca. 600 Studs von der Lobby entfernt.
+-- * Lobby und Arena sind abgeschlossen: Das Dorf hat einen Holzzaun mit unsichtbarer Wand
+--   (das Arena-Tor ist magisch versiegelt), die Arena eine unsichtbare Ringwand. In die Arena
+--   kommt man nur per Runden-Teleport. Ein Waechter holt Kaempfer zurueck, die (z.B. durch
+--   einen Teleport-Skill) trotzdem draussen landen.
 -- * Baeume, Buesche, Felsen und Blumen werden mit festem Seed verteilt.
 -- Alles ausser den Terrain-Voxeln (und den Wolken unter Terrain) liegt in workspace.Map.
 
@@ -11,6 +16,8 @@ local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local TextService = game:GetService("TextService")
+local PhysicsService = game:GetService("PhysicsService")
+local Players = game:GetService("Players")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Make = require(Shared:WaitForChild("Make"))
@@ -40,6 +47,24 @@ local A: Vector3 = Config.World.ArenaCenter
 local AR: number = Config.World.ArenaRadius
 -- Talboden auf das Terrain-Raster (4 Studs) runden, damit die Wiese exakt flach ist
 local GROUND = 4 * math.floor(L.Y / 4 + 0.5)
+
+-- Grenzen: Das Dorf ist ein regelmaessiges Vieleck (eine Seite liegt genau im Norden, dort
+-- steht das Arena-Tor), die Arena ein feineres Vieleck knapp ausserhalb der Kampfflaeche.
+local LOBBY_SIDES = 24
+local LOBBY_FENCE = 118 -- Abstand Dorfmitte -> Zaunlinie (Inkreisradius des Vielecks)
+local ARENA_SIDES = 48
+local ARENA_WALL = AR + 1.8 -- Mittellinie der unsichtbaren Arena-Ringwand
+local ARENA_WALL_T = 1.6 -- Wandstaerke (Innenseite bei AR + 1.0)
+local BOUNDARY_GROUP = "WorldBoundary" -- stoesst nur mit Charakteren zusammen
+-- Arena-Eingaenge (Winkel um die Arena-Mitte, pi/2 = Sueden = Richtung Lobby)
+local ARENA_ENTRANCES = { 0, math.pi / 2, math.pi, math.pi * 1.5 }
+
+-- Seiten-Normalen des Dorf-Vielecks (XZ), Seite 1 zeigt nach Norden (-Z)
+local LOBBY_NORMALS: { Vector2 } = {}
+for k = 0, LOBBY_SIDES - 1 do
+	local a = -math.pi / 2 + k * (2 * math.pi / LOBBY_SIDES)
+	table.insert(LOBBY_NORMALS, Vector2.new(math.cos(a), math.sin(a)))
+end
 
 -- Das Tal ist eine Ellipse zwischen Lobby und Arena, ringsum Berge
 local VC = Vector3.new((L.X + A.X) / 2, GROUND, (L.Z + A.Z) / 2)
@@ -84,6 +109,41 @@ end
 
 local function flatLook(from: Vector3, to: Vector3): CFrame
 	return CFrame.lookAt(from, Vector3.new(to.X, from.Y, to.Z))
+end
+
+-- Ecke i des Dorf-Vielecks auf der Zaunlinie. Seite k laeuft von Ecke k-1 zu Ecke k,
+-- Seite 1 ist die Nordseite (Richtung Arena).
+local function lobbyCorner(i: number): Vector3
+	local a = -math.pi / 2 + (i - 0.5) * (2 * math.pi / LOBBY_SIDES)
+	local r = LOBBY_FENCE / math.cos(math.pi / LOBBY_SIDES)
+	return Vector3.new(L.X + math.cos(a) * r, GROUND, L.Z + math.sin(a) * r)
+end
+
+-- Wie weit ein Punkt (XZ) ueber die Zaunlinie hinausragt; <= 0 heisst: im Dorf
+local function lobbyExcess(pos: Vector3): number
+	local dx, dz = pos.X - L.X, pos.Z - L.Z
+	local best = -math.huge
+	for _, n in LOBBY_NORMALS do
+		best = math.max(best, dx * n.X + dz * n.Y)
+	end
+	return best - LOBBY_FENCE
+end
+
+-- Schnitt zweier Strecken in XZ: Anteil t auf a->b (oder nil)
+local function segmentHit(a: Vector3, b: Vector3, c: Vector3, d: Vector3): number?
+	local rx, rz = b.X - a.X, b.Z - a.Z
+	local qx, qz = d.X - c.X, d.Z - c.Z
+	local den = rx * qz - rz * qx
+	if math.abs(den) < 1e-6 then
+		return nil
+	end
+	local wx, wz = c.X - a.X, c.Z - a.Z
+	local t = (wx * qz - wz * qx) / den
+	local u = (wx * rz - wz * rx) / den
+	if t >= 0 and t <= 1 and u >= 0 and u <= 1 then
+		return t
+	end
+	return nil
 end
 
 -- Verankertes Bauteil ohne Kollision (Kollision nur dort, wo man anstossen soll)
@@ -241,51 +301,133 @@ local function addFire(holder: Instance, scale: number, smoke: boolean): Attachm
 	return att
 end
 
--- Schwebendes Namensschild im Chunky-Stil (farbige Platte, dicke dunkle Kontur)
-local function marker(adornee: BasePart, title: string, fill: Color3, lip: Color3, height: number)
-	local width = #title * 16 + 40
+-- Zahlenfolge (Partikelgroesse) mit einem Faktor multiplizieren
+local function scaleSeq(seq: NumberSequence, f: number): NumberSequence
+	local keys = {}
+	for _, k in seq.Keypoints do
+		table.insert(keys, NumberSequenceKeypoint.new(k.Time, k.Value * f, k.Envelope * f))
+	end
+	return NumberSequence.new(keys)
+end
+
+-- Skaliert ein fertig gebautes (noch nicht geparentes) Modell gleichmaessig um "pivot":
+-- Teile, Attachments, Untermodelle (WorldPivot fuer Spin/Sway), Lichter und Partikel.
+-- Bewusst von Hand statt Model:ScaleTo, damit Licht-Reichweite und Partikel garantiert
+-- genau einmal mitwachsen.
+local function scaleModel(model: Model, pivot: CFrame, f: number)
+	model.WorldPivot = pivot
+	if math.abs(f - 1) < 1e-3 then
+		return
+	end
+	local function move(cf: CFrame): CFrame
+		local rel = pivot:ToObjectSpace(cf)
+		return pivot * CFrame.new(rel.Position * f) * rel.Rotation
+	end
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			local p = d :: BasePart
+			local cf = p.CFrame
+			p.Size = p.Size * f
+			p.CFrame = move(cf)
+		elseif d:IsA("Attachment") then
+			local att = d :: Attachment
+			att.Position = att.Position * f
+		elseif d:IsA("Model") then
+			local m = d :: Model
+			m.WorldPivot = move(m.WorldPivot)
+		elseif d:IsA("PointLight") then
+			local l = d :: PointLight
+			l.Range = math.min(l.Range * f, 60)
+		elseif d:IsA("ParticleEmitter") then
+			local e = d :: ParticleEmitter
+			e.Size = scaleSeq(e.Size, f)
+			e.Speed = NumberRange.new(e.Speed.Min * f, e.Speed.Max * f)
+			e.Acceleration = e.Acceleration * f
+		end
+	end
+end
+
+-- Oberkante (Welt-Y) aller sichtbaren Teile eines Objekts (fuer die schwebenden Schilder)
+local function topOf(root: Instance): number
+	local best = -math.huge
+	local function consider(p: BasePart)
+		if p.Transparency >= 0.99 then
+			return
+		end
+		local cf, s = p.CFrame, p.Size
+		local half = 0.5 * (math.abs(cf.XVector.Y) * s.X + math.abs(cf.YVector.Y) * s.Y + math.abs(cf.ZVector.Y) * s.Z)
+		best = math.max(best, cf.Position.Y + half)
+	end
+	if root:IsA("BasePart") then
+		consider(root :: BasePart)
+	end
+	for _, d in root:GetDescendants() do
+		if d:IsA("BasePart") then
+			consider(d :: BasePart)
+		end
+	end
+	return if best > -math.huge then best else GROUND
+end
+
+-- Schwebendes Namensschild im Chunky-Stil (farbige Platte mit Lippe, dicke dunkle Kontur).
+-- * schwebt klar UEBER dem Objekt: Mitte = Oberkante des Objekts (topY) + 4 Studs
+-- * AlwaysOnTop: wird nie von Boden oder Geometrie angeschnitten
+-- * Groesse in Studs (UDim2-Scale), wird mit der Entfernung also kleiner statt den
+--   Bildschirm zu fuellen; Breite richtet sich nach der Textlaenge
+local MARKER_H = 2.2
+local function marker(adornee: BasePart, title: string, fill: Color3, lip: Color3, topY: number): BillboardGui
+	local ratio = #title * 0.62 -- Breite/Hoehe des Textes (Fallback)
 	pcall(function()
-		local size = TextService:GetTextSize(title, 26, Enum.Font.FredokaOne, Vector2.new(1000, 100))
-		width = math.ceil(size.X) + 40
+		local size = TextService:GetTextSize(title, 100, Enum.Font.FredokaOne, Vector2.new(5000, 200))
+		ratio = size.X / 100
 	end)
+	local textH = MARKER_H * 0.5
+	local width = ratio * textH + MARKER_H * 0.9
 	local gui = Make("BillboardGui", {
 		Name = "Marker",
-		Size = UDim2.fromOffset(width + 8, 54),
-		StudsOffsetWorldSpace = Vector3.new(0, height, 0),
+		Size = UDim2.fromScale(width, MARKER_H),
+		StudsOffsetWorldSpace = Vector3.new(0, topY + 4 - adornee.Position.Y, 0),
 		LightInfluence = 0,
-		MaxDistance = 90,
-		AlwaysOnTop = false,
+		MaxDistance = 120,
+		AlwaysOnTop = true,
+		ClipsDescendants = false,
 		Parent = adornee,
 	})
 	local lipFrame = Make("Frame", {
 		Name = "Lip",
 		BackgroundColor3 = lip,
 		BorderSizePixel = 0,
-		Position = UDim2.fromOffset(4, 4),
-		Size = UDim2.new(1, -8, 1, -8),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.94, 0.86),
 		Parent = gui,
 	})
-	Make("UICorner", { CornerRadius = UDim.new(0, 12), Parent = lipFrame })
-	Make("UIStroke", { Color = PAL.Ink, Thickness = 3, LineJoinMode = Enum.LineJoinMode.Round, Parent = lipFrame })
+	Make("UICorner", { CornerRadius = UDim.new(0.3, 0), Parent = lipFrame })
+	Make("UIStroke", { Color = PAL.Ink, Thickness = 2, LineJoinMode = Enum.LineJoinMode.Round, Parent = lipFrame })
 	local face = Make("Frame", {
 		Name = "Face",
 		BackgroundColor3 = fill,
 		BorderSizePixel = 0,
-		Size = UDim2.new(1, 0, 1, -6),
+		Size = UDim2.fromScale(1, 0.84),
 		Parent = lipFrame,
 	})
-	Make("UICorner", { CornerRadius = UDim.new(0, 12), Parent = face })
+	Make("UICorner", { CornerRadius = UDim.new(0.3, 0), Parent = face })
 	Make("UIGradient", { Rotation = 90, Color = ColorSequence.new(Color3.new(1, 1, 1), C(214, 214, 214)), Parent = face })
 	local label = Make("TextLabel", {
+		Name = "Title",
 		BackgroundTransparency = 1,
-		Size = UDim2.fromScale(1, 1),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.86, 0.7),
 		Text = title,
 		Font = Enum.Font.FredokaOne,
-		TextSize = 26,
+		TextScaled = true,
+		TextSize = 40,
 		TextColor3 = Color3.new(1, 1, 1),
 		Parent = face,
 	})
-	Make("UIStroke", { Color = PAL.Ink, Thickness = 2.5, LineJoinMode = Enum.LineJoinMode.Round, Parent = label })
+	Make("UITextSizeConstraint", { MinTextSize = 6, MaxTextSize = 96, Parent = label })
+	Make("UIStroke", { Color = PAL.Ink, Thickness = 1.5, LineJoinMode = Enum.LineJoinMode.Round, Parent = label })
 	return gui
 end
 
@@ -398,10 +540,29 @@ end
 -- Feste Orte (alles relativ zu Lobby / Arena)
 -- =============================================================================
 
+-- Punkt auf einem Kreis um die Dorfmitte (Grad: 0 = Osten, 90 = Sueden, 270 = Norden/Arena)
+local function ring(deg: number, d: number): Vector3
+	local a = math.rad(deg)
+	return at(math.cos(a) * d, math.sin(a) * d)
+end
+
 local SPAWN_POS = at(0, 22)
-local SHRINE_POS = at(40, -28)
-local TRAIN_POS = at(-50, -26)
-local CAMP_POS = at(-46, 20)
+local SHRINE_POS = ring(318, 62)
+local TRAIN_POS = at(-56, -26)
+local CAMP_POS = at(-51, 32)
+local GATE_POS = at(0, -LOBBY_FENCE) -- Arena-Tor sitzt genau in der noerdlichen Zaunseite
+local SIGN_POS = at(12, -48)
+-- Haeuser (Tuer zum Dorfplatz) und Marktstaende an der Dorfstrasse nach Osten
+local COTTAGES: { { Pos: Vector3, Roof: Color3 } } = {
+	{ Pos = at(90, 0), Roof = C(120, 84, 70) },
+	{ Pos = ring(68, 88), Roof = PAL.Roof },
+	{ Pos = ring(112, 86), Roof = C(142, 92, 60) },
+	{ Pos = ring(240, 92), Roof = PAL.Roof },
+}
+local STALLS: { { Pos: Vector3, Face: Vector3, Roof: Color3 } } = {
+	{ Pos = at(54, -12), Face = Vector3.new(0, 0, 1), Roof = CLOTH[1] },
+	{ Pos = at(54, 12), Face = Vector3.new(0, 0, -1), Roof = CLOTH[2] },
+}
 local LAKE1 = at(-160, -240)
 local LAKE2 = at(-198, -204)
 local TOWER_POS = at(52, -300)
@@ -409,22 +570,31 @@ local RUINS = { at(-130, -430), at(140, -150), at(236, -470) }
 local MENU_CAM = at(100, 118, 52)
 local MENU_FOCUS = at(-12, -40, 6)
 
--- Hauptweg Lobby -> Arena (leicht geschwungen)
-local MAIN_PATH: { Vector3 } = {}
+-- Vor der Haustuer (lokal -Z zeigt zur Dorfmitte)
+local function doorstep(pos: Vector3, dist: number): Vector3
+	local dir = Vector3.new(L.X - pos.X, 0, L.Z - pos.Z).Unit
+	return pos + dir * dist
+end
+
+-- Hauptweg Lobby -> Tor -> Arena (hinter dem Tor leicht geschwungen; nur noch Deko,
+-- in die Arena geht es ausschliesslich per Runden-Teleport)
+local MAIN_PATH: { Vector3 } = { at(0, -33) }
 do
-	local startP = at(0, -33)
+	local startP = at(0, -LOBBY_FENCE - 24)
 	local endP = Vector3.new(A.X, GROUND, A.Z + AR + 40)
-	local bends = { 0, 6, 14, -6, -12, 4, 2, 0 }
+	local bends = { 0, 12, -6, -12, 4, 2, 0 }
 	for i, off in bends do
 		local t = (i - 1) / (#bends - 1)
 		local p = startP:Lerp(endP, t)
 		table.insert(MAIN_PATH, Vector3.new(p.X + off, GROUND, p.Z))
 	end
 end
-local WEST_PATH = { at(-33, 2), at(-78, -4), at(-104, -70), at(-110, -150), at(-98, -228) }
-local SHRINE_PATH = { at(26, -12), SHRINE_POS + Vector3.new(-6, 0, 4) }
-local EAST_PATH = { at(33, 0), at(66, -3) }
-local SOUTH_PATH = { at(8, 32), at(18, 60) }
+-- Weg zum See: endet im Dorf an einem verschlossenen Gatter im Zaun
+local WEST_PATH = { at(-33, 2), at(-78, -2), at(-104, -70), at(-110, -150), at(-98, -228) }
+local SHRINE_PATH = { at(26, -14), SHRINE_POS + Vector3.new(-7, 0, 6) }
+local EAST_PATH = { at(33, 0), at(79, 2) }
+local SOUTH_PATH = { at(0, 33), at(0, 48), doorstep(COTTAGES[3].Pos, 11) }
+local SOUTHEAST_PATH = { at(0, 48), doorstep(COTTAGES[2].Pos, 11) }
 local STREAM = { at(-372, -430), at(-320, -392), at(-268, -350), at(-232, -300), at(-205, -258) }
 
 -- =============================================================================
@@ -571,11 +741,13 @@ local function buildBaseGround()
 	-- Lobby-Boden
 	paintDisc(at(0, 0), 33, M.Slate)
 	paintDisc(at(0, 0), 30, M.Cobblestone)
-	paintDisc(SHRINE_POS, 13, M.Basalt)
-	paintDisc(CAMP_POS, 9, M.Ground)
+	paintDisc(SHRINE_POS, 15.5, M.Basalt)
+	paintDisc(CAMP_POS, 11.5, M.Ground)
 	safe(function()
-		terrain:FillBlock(CFrame.new(TRAIN_POS.X, GROUND - 2, TRAIN_POS.Z), Vector3.new(34, 4, 26), M.Ground)
+		terrain:FillBlock(CFrame.new(TRAIN_POS.X, GROUND - 2, TRAIN_POS.Z), Vector3.new(38, 4, 30), M.Ground)
 	end)
+	-- festgetretene Erde vor dem Arena-Tor und am Gatter zum See
+	paintDisc(GATE_POS, 12, M.Ground)
 	-- Arena-Umgebung: gepflasterter Ring, aussen festgetretene Erde
 	paintDisc(A, AR + 40, M.Ground)
 	paintDisc(A, AR + 24, M.Cobblestone)
@@ -734,6 +906,7 @@ local function buildPaths()
 	paintPath(SHRINE_PATH, 7, M.Ground)
 	paintPath(EAST_PATH, 7, M.Ground)
 	paintPath(SOUTH_PATH, 6, M.Ground)
+	paintPath(SOUTHEAST_PATH, 6, M.Ground)
 	-- ein paar matschige Stellen auf dem Hauptweg
 	for i = 2, #MAIN_PATH - 1, 2 do
 		local p = MAIN_PATH[i]
@@ -911,8 +1084,18 @@ end
 -- Requisiten: Laternen, Zelte, Staende, Haeuser, Zaeune, Schilder ...
 -- =============================================================================
 
--- Laterne am Holzpfahl; der Arm zeigt Richtung lokal -Z
-local function lantern(parent: Instance, cf: CFrame, height: number?)
+-- Massstab der Requisiten (Grundmasse unten sind die alten, zu kleinen Modelle)
+local LANTERN_SCALE = 1.5
+local TENT_SCALE = 1.6
+local COTTAGE_SCALE = 1.8
+local SIGN_SCALE = 1.5
+local GATE_SCALE = 1.8
+local PROP_SCALE = 1.3 -- Faesser, Kisten, Lagerfeuer, Trainingsgeraete
+local SHRINE_SCALE = 1.2
+
+-- Laterne am Holzpfahl; der Arm zeigt Richtung lokal -Z.
+-- "height" ist die Grundhoehe vor dem Skalieren (Standard 8 -> ca. 12 Studs hoch).
+local function lantern(parent: Instance, cf: CFrame, height: number?, scale: number?)
 	local h = height or 8
 	local model = Make("Model", { Name = "Lantern" })
 	block(model, {
@@ -954,6 +1137,7 @@ local function lantern(parent: Instance, cf: CFrame, height: number?)
 	})
 	block(model, { Size = Vector3.new(1.05, 0.2, 1.05), CFrame = hang * CFrame.new(0, -0.72, 0), Material = M.Metal, Color = PAL.Iron })
 	pointLight(core, C(255, 186, 110), 14, 1, true)
+	scaleModel(model, cf, scale or LANTERN_SCALE)
 	model.Parent = parent
 end
 
@@ -986,18 +1170,23 @@ local function tent(parent: Instance, cf: CFrame, color: Color3)
 			Color = PAL.WoodDark,
 		})
 	end
+	scaleModel(model, cf, TENT_SCALE)
 	model.Parent = parent
 end
 
-local function barrel(parent: Instance, ground: Vector3)
-	pillar(parent, ground, 2.8, 2.2, { Material = M.Wood, Color = C(134, 92, 56), CanCollide = true })
+-- Fass (Standard: ca. 3.6 Studs hoch)
+local function barrel(parent: Instance, ground: Vector3, scale: number?)
+	local s = scale or PROP_SCALE
+	pillar(parent, ground, 2.8 * s, 2.2 * s, { Material = M.Wood, Color = C(134, 92, 56), CanCollide = true })
 	for _, y in { 0.45, 2.1 } do
-		pillar(parent, ground + Vector3.new(0, y, 0), 0.25, 2.3, { Material = M.Metal, Color = PAL.Iron, CanQuery = false })
+		pillar(parent, ground + Vector3.new(0, y * s, 0), 0.25 * s, 2.3 * s, { Material = M.Metal, Color = PAL.Iron, CanQuery = false })
 	end
-	pillar(parent, ground + Vector3.new(0, 2.8, 0), 0.06, 1.9, { Material = M.WoodPlanks, Color = PAL.WoodLight, CanQuery = false })
+	pillar(parent, ground + Vector3.new(0, 2.8 * s, 0), 0.06 * s, 1.9 * s, { Material = M.WoodPlanks, Color = PAL.WoodLight, CanQuery = false })
 end
 
-local function crate(parent: Instance, cf: CFrame, s: number)
+-- Holzkiste mit Kantenleiste; "s" ist die Kantenlaenge vor dem Skalieren
+local function crate(parent: Instance, cf: CFrame, s0: number, scale: number?)
+	local s = s0 * (scale or PROP_SCALE)
 	block(parent, { Size = Vector3.new(s, s, s), CFrame = cf * CFrame.new(0, s / 2, 0), Material = M.WoodPlanks, Color = PAL.Plank, CanCollide = true })
 	block(parent, {
 		Size = Vector3.new(s + 0.1, 0.22, s + 0.1),
@@ -1008,40 +1197,55 @@ local function crate(parent: Instance, cf: CFrame, s: number)
 	})
 end
 
--- Marktstand: Theke vorne (lokal -Z), gestreiftes Stoffdach
+-- Marktstand: Theke vorne (lokal -Z), gestreiftes Stoffdach. Theke in Hueft-, Dach in
+-- doppelter Kopfhoehe eines Charakters (ca. 14 x 9 Studs Grundflaeche).
 local function stall(parent: Instance, cf: CFrame, roofColor: Color3)
 	local model = Make("Model", { Name = "MarketStall" })
-	for _, x in { -3.8, 3.8 } do
-		block(model, { Size = Vector3.new(0.55, 6.6, 0.55), CFrame = cf * CFrame.new(x, 3.3, -1.9), Material = M.Wood, Color = PAL.Wood, CanCollide = true })
-		block(model, { Size = Vector3.new(0.55, 7.6, 0.55), CFrame = cf * CFrame.new(x, 3.8, 1.9), Material = M.Wood, Color = PAL.Wood, CanCollide = true })
+	for _, x in { -6.4, 6.4 } do
+		block(model, { Size = Vector3.new(0.85, 10.6, 0.85), CFrame = cf * CFrame.new(x, 5.3, -3.2), Material = M.Wood, Color = PAL.Wood, CanCollide = true })
+		block(model, { Size = Vector3.new(0.85, 12.2, 0.85), CFrame = cf * CFrame.new(x, 6.1, 3.2), Material = M.Wood, Color = PAL.Wood, CanCollide = true })
+		-- Querstrebe zwischen vorderem und hinterem Pfosten
+		block(model, { Size = Vector3.new(0.5, 0.5, 6.4), CFrame = cf * CFrame.new(x, 9.6, 0), Material = M.Wood, Color = PAL.WoodDark })
 	end
-	block(model, { Size = Vector3.new(8, 2.8, 1.5), CFrame = cf * CFrame.new(0, 1.4, -1.6), Material = M.WoodPlanks, Color = PAL.Plank, CanCollide = true })
-	block(model, { Size = Vector3.new(8.6, 0.3, 2), CFrame = cf * CFrame.new(0, 2.95, -1.6), Material = M.Wood, Color = PAL.WoodLight })
+	block(model, { Size = Vector3.new(13.4, 3.2, 2.4), CFrame = cf * CFrame.new(0, 1.6, -2.6), Material = M.WoodPlanks, Color = PAL.Plank, CanCollide = true })
+	block(model, { Size = Vector3.new(14.2, 0.4, 3.2), CFrame = cf * CFrame.new(0, 3.4, -2.6), Material = M.Wood, Color = PAL.WoodLight })
+	-- Rueckwand-Regal
+	block(model, { Size = Vector3.new(12.4, 0.35, 1.6), CFrame = cf * CFrame.new(0, 5.2, 2.6), Material = M.Wood, Color = PAL.WoodLight })
 	for i = 0, 3 do
 		block(model, {
-			Size = Vector3.new(2.25, 0.2, 5.4),
-			CFrame = cf * CFrame.new(-3.375 + i * 2.25, 7.15, -0.05) * CFrame.Angles(math.rad(-15), 0, 0),
+			Size = Vector3.new(3.6, 0.3, 8.8),
+			CFrame = cf * CFrame.new(-5.4 + i * 3.6, 11.4, 0) * CFrame.Angles(math.rad(-15), 0, 0),
 			Material = M.Fabric,
 			Color = if i % 2 == 0 then roofColor else PAL.Canvas,
 		})
 	end
-	-- Ware auf der Theke
+	-- Ware auf der Theke und im Regal
 	local goods = { C(204, 52, 46), C(250, 150, 40), C(120, 176, 56), C(230, 196, 70) }
-	for i = 1, 6 do
-		ball(model, (cf * CFrame.new(-3 + i * 0.9, 3.45, -1.6 + rng:NextNumber(-0.4, 0.4))).Position, 0.6, {
+	for i = 1, 8 do
+		ball(model, (cf * CFrame.new(-6.3 + i * 1.4, 4.05, -2.6 + rng:NextNumber(-0.6, 0.6))).Position, 0.9, {
 			Material = M.SmoothPlastic,
 			Color = goods[(i % #goods) + 1],
 			CanQuery = false,
 			CastShadow = false,
 		})
 	end
-	crate(model, cf * CFrame.new(5.6, 0, -1.2) * CFrame.Angles(0, 0.2, 0), 2)
-	crate(model, cf * CFrame.new(5.5, 2, -1.1) * CFrame.Angles(0, -0.15, 0), 1.4)
-	barrel(model, (cf * CFrame.new(-5.6, 0, -0.6)).Position)
+	for i = 1, 5 do
+		ball(model, (cf * CFrame.new(-6 + i * 2, 5.85, 2.6)).Position, 1, {
+			Material = M.SmoothPlastic,
+			Color = goods[((i + 1) % #goods) + 1],
+			CanQuery = false,
+			CastShadow = false,
+		})
+	end
+	crate(model, cf * CFrame.new(8.6, 0, -2) * CFrame.Angles(0, 0.2, 0), 2)
+	crate(model, cf * CFrame.new(8.5, 2.6, -1.9) * CFrame.Angles(0, -0.15, 0), 1.4)
+	barrel(model, (cf * CFrame.new(-8.8, 0, -1)).Position)
+	model.WorldPivot = cf
 	model.Parent = parent
 end
 
--- Kleines Fachwerkhaus (Tuer vorne = lokal -Z)
+-- Fachwerkhaus (Tuer vorne = lokal -Z). Grundmasse 12 x 10, wird mit COTTAGE_SCALE
+-- auf ca. 22 x 18 Studs mit ca. 8 Studs hoher Tuer gebracht.
 local function cottage(parent: Instance, cf: CFrame, roofColor: Color3)
 	local model = Make("Model", { Name = "Cottage" })
 	local W, D, H = 12, 10, 7
@@ -1122,18 +1326,24 @@ local function cottage(parent: Instance, cf: CFrame, roofColor: Color3)
 			})
 		end
 	end
+	scaleModel(model, cf, COTTAGE_SCALE)
 	model.Parent = parent
 end
 
--- Holzzaun zwischen zwei Bodenpunkten
-local function fence(parent: Instance, a: Vector3, b: Vector3)
+-- Holzzaun zwischen zwei Bodenpunkten ("scale" = Massstab, Standard ca. 4.3 Studs hoch).
+-- skipEnd: letzten Pfosten weglassen (bei geschlossenen Ringen setzt ihn die naechste Seite).
+local function fence(parent: Instance, a: Vector3, b: Vector3, scale: number?, skipEnd: boolean?)
+	local s = scale or 1.2
 	local len = (b - a).Magnitude
-	local n = math.max(1, math.floor(len / 4.5 + 0.5))
-	for i = 0, n do
+	if len < 0.5 then
+		return
+	end
+	local n = math.max(1, math.floor(len / (4.5 * s) + 0.5))
+	for i = 0, if skipEnd then n - 1 else n do
 		local p = a:Lerp(b, i / n)
 		block(parent, {
-			Size = Vector3.new(0.6, 3.6, 0.6),
-			CFrame = CFrame.new(p + Vector3.new(0, 1.5, 0)) * CFrame.Angles(0, rng:NextNumber(-0.2, 0.2), rng:NextNumber(-0.03, 0.03)),
+			Size = Vector3.new(0.6, 3.6, 0.6) * s,
+			CFrame = CFrame.new(p + Vector3.new(0, 1.5 * s, 0)) * CFrame.Angles(0, rng:NextNumber(-0.2, 0.2), rng:NextNumber(-0.03, 0.03)),
 			Material = M.Wood,
 			Color = PAL.WoodDark,
 			CanCollide = true,
@@ -1141,8 +1351,8 @@ local function fence(parent: Instance, a: Vector3, b: Vector3)
 	end
 	for _, y in { 1.3, 2.6 } do
 		block(parent, {
-			Size = Vector3.new(0.28, 0.4, len),
-			CFrame = CFrame.lookAt(a:Lerp(b, 0.5) + Vector3.new(0, y, 0), b + Vector3.new(0, y, 0)),
+			Size = Vector3.new(0.28 * s, 0.4 * s, len),
+			CFrame = CFrame.lookAt(a:Lerp(b, 0.5) + Vector3.new(0, y * s, 0), b + Vector3.new(0, y * s, 0)),
 			Material = M.Wood,
 			Color = PAL.Wood,
 			CanCollide = true,
@@ -1174,6 +1384,7 @@ local function signpost(parent: Instance, ground: Vector3, entries: { { Text: st
 		signText(board, e.Text, Enum.NormalId.Front)
 		signText(board, e.Text, Enum.NormalId.Back)
 	end
+	scaleModel(model, CFrame.new(ground), SIGN_SCALE)
 	model.Parent = parent
 end
 
@@ -1260,12 +1471,12 @@ local function buildCrateAltar(lobby: Instance)
 		RequiresLineOfSight = false,
 		Parent = altar,
 	})
-	marker(altar, "CRATES", C(255, 187, 40), C(196, 116, 10), 8)
+	marker(altar, "CRATES", C(255, 187, 40), C(196, 116, 10), topOf(chest))
 end
 
 local function buildShrine(lobby: Instance)
 	local S = SHRINE_POS
-	local folder = Make("Model", { Name = "BlackHoleShrineSite", Parent = lobby })
+	local folder = Make("Model", { Name = "BlackHoleShrineSite" })
 	pillar(folder, S - Vector3.new(0, 0.4, 0), 1.2, 17, { Material = M.Basalt, Color = C(48, 44, 56), CanCollide = true })
 	local shrine = pillar(folder, S + Vector3.new(0, 0.6, 0), 0.9, 12, {
 		Name = "BlackHoleShrine",
@@ -1387,7 +1598,10 @@ local function buildShrine(lobby: Instance)
 		RequiresLineOfSight = false,
 		Parent = shrine,
 	})
-	marker(shrine, "BLACK HOLE", C(150, 96, 255), C(92, 50, 184), 11)
+	-- etwas groesser, damit der Steinkreis neben den neuen Haeusern nicht verloren wirkt
+	scaleModel(folder, CFrame.new(S), SHRINE_SCALE)
+	folder.Parent = lobby
+	marker(shrine, "BLACK HOLE", C(150, 96, 255), C(92, 50, 184), topOf(folder))
 end
 
 local function buildTraining(lobby: Instance): { CFrame }
@@ -1396,32 +1610,32 @@ local function buildTraining(lobby: Instance): { CFrame }
 	local floorTop = GROUND + 0.15
 	block(yard, {
 		Name = "TrainingFloor",
-		Size = Vector3.new(30, 1, 22),
+		Size = Vector3.new(34, 1, 26),
 		CFrame = CFrame.new(T.X, floorTop - 0.5, T.Z),
 		Material = M.Ground,
 		Color = C(138, 106, 74),
 		CanCollide = true,
 	})
-	-- Zaun mit Eingaengen im Osten (zum Dorfplatz) und Sueden (zum Lager)
+	-- Zaun (34 x 26) mit Eingaengen im Osten (zum Dorfplatz) und Suedosten (zu Spawn und Lager)
 	local function p(x: number, z: number): Vector3
 		return Vector3.new(T.X + x, GROUND, T.Z + z)
 	end
-	fence(yard, p(-16, -12), p(16, -12))
-	fence(yard, p(-16, -12), p(-16, 12))
-	fence(yard, p(-16, 12), p(-4, 12))
-	fence(yard, p(4, 12), p(16, 12))
-	fence(yard, p(16, 12), p(16, 4))
-	fence(yard, p(16, -4), p(16, -12))
-	for _, gp in { p(16, 4), p(16, -4), p(-4, 12), p(4, 12) } do
-		block(yard, { Size = Vector3.new(0.9, 4.6, 0.9), CFrame = CFrame.new(gp + Vector3.new(0, 2.1, 0)), Material = M.Wood, Color = PAL.Wood, CanCollide = true })
-		ball(yard, gp + Vector3.new(0, 4.6, 0), 1, { Material = M.Wood, Color = PAL.WoodLight, CanQuery = false })
+	fence(yard, p(-17, -13), p(17, -13))
+	fence(yard, p(-17, -13), p(-17, 13))
+	fence(yard, p(-17, 13), p(4.5, 13))
+	fence(yard, p(13.5, 13), p(17, 13))
+	fence(yard, p(17, 13), p(17, 4.5))
+	fence(yard, p(17, -4.5), p(17, -13))
+	for _, gp in { p(17, 4.5), p(17, -4.5), p(4.5, 13), p(13.5, 13) } do
+		block(yard, { Size = Vector3.new(1.1, 5.6, 1.1), CFrame = CFrame.new(gp + Vector3.new(0, 2.5, 0)), Material = M.Wood, Color = PAL.Wood, CanCollide = true })
+		ball(yard, gp + Vector3.new(0, 5.5, 0), 1.25, { Material = M.Wood, Color = PAL.WoodLight, CanQuery = false })
 	end
 
 	-- Plaetze fuer die Trainingspuppen (Strohkreis am Boden)
 	local spots = {}
 	for i = -1, 1 do
-		local pos = p(i * 8, -5)
-		pillar(yard, Vector3.new(pos.X, floorTop - 0.05, pos.Z), 0.12, 3.6, {
+		local pos = p(i * 9, -4)
+		pillar(yard, Vector3.new(pos.X, floorTop - 0.05, pos.Z), 0.12, 4.2, {
 			Material = M.Fabric,
 			Color = PAL.Straw,
 			CanQuery = false,
@@ -1432,7 +1646,7 @@ local function buildTraining(lobby: Instance): { CFrame }
 	end
 	block(yard, {
 		Name = "TrainingArea",
-		Size = Vector3.new(26, 1, 18),
+		Size = Vector3.new(30, 1, 22),
 		CFrame = CFrame.new(T.X, floorTop + 2, T.Z + 1),
 		Transparency = 1,
 		CanCollide = false,
@@ -1440,43 +1654,61 @@ local function buildTraining(lobby: Instance): { CFrame }
 		CastShadow = false,
 	})
 
-	-- Waffenstaender
-	local rack = p(-11, 8)
-	for _, x in { -2, 2 } do
-		block(yard, { Size = Vector3.new(0.5, 4, 0.5), CFrame = CFrame.new(rack + Vector3.new(x, 2, 0)), Material = M.Wood, Color = PAL.WoodDark, CanCollide = true })
+	-- Waffenstaender (Suedwest-Ecke, Schwerter zeigen in den Hof)
+	do
+		local rackModel = Make("Model", { Name = "WeaponRack" })
+		local rack = p(-11.5, 9.5)
+		for _, x in { -2, 2 } do
+			block(rackModel, { Size = Vector3.new(0.5, 4, 0.5), CFrame = CFrame.new(rack + Vector3.new(x, 2, 0)), Material = M.Wood, Color = PAL.WoodDark, CanCollide = true })
+		end
+		block(rackModel, { Size = Vector3.new(4.6, 0.4, 0.5), CFrame = CFrame.new(rack + Vector3.new(0, 3.4, 0)), Material = M.Wood, Color = PAL.WoodDark })
+		block(rackModel, { Size = Vector3.new(4.6, 0.4, 0.5), CFrame = CFrame.new(rack + Vector3.new(0, 1, 0)), Material = M.Wood, Color = PAL.WoodDark })
+		for i = -1, 1 do
+			local sword = CFrame.new(rack + Vector3.new(i * 1.3, 2.1, -0.45)) * CFrame.Angles(math.rad(-12), 0, 0)
+			block(rackModel, { Size = Vector3.new(0.35, 3.6, 0.12), CFrame = sword, Material = M.Wood, Color = PAL.WoodLight, CanQuery = false })
+			block(rackModel, { Size = Vector3.new(1.1, 0.22, 0.22), CFrame = sword * CFrame.new(0, 0.7, 0), Material = M.Wood, Color = PAL.WoodDark, CanQuery = false })
+		end
+		scaleModel(rackModel, CFrame.new(rack), PROP_SCALE)
+		rackModel.Parent = yard
 	end
-	block(yard, { Size = Vector3.new(4.6, 0.4, 0.5), CFrame = CFrame.new(rack + Vector3.new(0, 3.4, 0)), Material = M.Wood, Color = PAL.WoodDark })
-	block(yard, { Size = Vector3.new(4.6, 0.4, 0.5), CFrame = CFrame.new(rack + Vector3.new(0, 1, 0)), Material = M.Wood, Color = PAL.WoodDark })
-	for i = -1, 1 do
-		local sword = CFrame.new(rack + Vector3.new(i * 1.3, 2.1, -0.45)) * CFrame.Angles(math.rad(-12), 0, 0)
-		block(yard, { Size = Vector3.new(0.35, 3.6, 0.12), CFrame = sword, Material = M.Wood, Color = PAL.WoodLight, CanQuery = false })
-		block(yard, { Size = Vector3.new(1.1, 0.22, 0.22), CFrame = sword * CFrame.new(0, 0.7, 0), Material = M.Wood, Color = PAL.WoodDark, CanQuery = false })
+	-- Heuballen (Nordost-Ecke, hinter den Puppen)
+	do
+		local hay = Make("Model", { Name = "HayBales" })
+		local base = p(11.6, -10.4)
+		for _, x in { -2.1, 2.1 } do
+			local c = base + Vector3.new(x, 1.3, 0)
+			rod(hay, c - Vector3.new(1.7, 0, 0), c + Vector3.new(1.7, 0, 0), 2.6, { Material = M.Fabric, Color = PAL.Straw, CanCollide = true })
+		end
+		rod(hay, base + Vector3.new(-1.5, 3.4, 0), base + Vector3.new(1.5, 3.4, 0), 2.2, { Material = M.Fabric, Color = jitter(PAL.Straw, 0.05, rng), CanCollide = true })
+		scaleModel(hay, CFrame.new(base), PROP_SCALE)
+		hay.Parent = yard
 	end
-	-- Heuballen
-	for _, hb in { { 11, 8, 0 }, { 12, 4.4, 0.3 } } do
-		local c = p(hb[1], hb[2]) + Vector3.new(0, 1.3, 0)
-		rod(yard, c - Vector3.new(1.7, 0, 0), c + Vector3.new(1.7, 0, 0), 2.6, { Material = M.Fabric, Color = PAL.Straw, CanCollide = true })
+	-- Zielscheibe (Nordwest-Ecke, zeigt in den Hof)
+	do
+		local targetModel = Make("Model", { Name = "Target" })
+		local foot = p(-12.5, -9.5)
+		local tgt = flatLook(foot + Vector3.new(0, 2.6, 0), p(-12.5, 0))
+		for i, rg in { { 4, PAL.Straw }, { 3, C(196, 52, 46) }, { 2, C(240, 232, 214) }, { 1, C(196, 52, 46) } } do
+			block(targetModel, {
+				Shape = Enum.PartType.Cylinder,
+				Size = Vector3.new(0.6 + i * 0.05, rg[1], rg[1]),
+				CFrame = tgt * CFrame.Angles(0, math.rad(90), 0),
+				Material = M.Fabric,
+				Color = rg[2],
+				CanCollide = i == 1,
+			})
+		end
+		for _, x in { -1.2, 1.2 } do
+			block(targetModel, { Size = Vector3.new(0.4, 4.4, 0.4), CFrame = tgt * CFrame.new(x, -0.6, 0.5) * CFrame.Angles(math.rad(-12), 0, 0), Material = M.Wood, Color = PAL.WoodDark })
+		end
+		scaleModel(targetModel, CFrame.new(foot), 1.2)
+		targetModel.Parent = yard
 	end
-	rod(yard, p(11.5, 6.2) + Vector3.new(-1.5, 3.4, 0), p(11.5, 6.2) + Vector3.new(1.5, 3.4, 0), 2.2, { Material = M.Fabric, Color = jitter(PAL.Straw, 0.05, rng), CanCollide = true })
-	-- Zielscheibe
-	local tgt = flatLook(p(-12, -8) + Vector3.new(0, 2.6, 0), p(-12, 0))
-	for i, ring in { { 4, PAL.Straw }, { 3, C(196, 52, 46) }, { 2, C(240, 232, 214) }, { 1, C(196, 52, 46) } } do
-		block(yard, {
-			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(0.6 + i * 0.05, ring[1], ring[1]),
-			CFrame = tgt * CFrame.Angles(0, math.rad(90), 0),
-			Material = M.Fabric,
-			Color = ring[2],
-			CanCollide = i == 1,
-		})
-	end
-	for _, x in { -1.2, 1.2 } do
-		block(yard, { Size = Vector3.new(0.4, 4.4, 0.4), CFrame = tgt * CFrame.new(x, -0.6, 0.5) * CFrame.Angles(math.rad(-12), 0, 0), Material = M.Wood, Color = PAL.WoodDark })
-	end
-	-- Schild am Eingang
-	local signPos = p(17.2, -6)
-	block(yard, { Size = Vector3.new(0.6, 5.2, 0.6), CFrame = CFrame.new(signPos + Vector3.new(0, 2.4, 0)), Material = M.Wood, Color = PAL.WoodDark, CanCollide = true })
-	local board = block(yard, {
+	-- Schild am Eingang (Osten, zum Dorfplatz)
+	local signModel = Make("Model", { Name = "TrainingSign" })
+	local signPos = p(19.2, -7)
+	block(signModel, { Size = Vector3.new(0.6, 5.2, 0.6), CFrame = CFrame.new(signPos + Vector3.new(0, 2.4, 0)), Material = M.Wood, Color = PAL.WoodDark, CanCollide = true })
+	local board = block(signModel, {
 		Size = Vector3.new(5.4, 1.6, 0.3),
 		CFrame = CFrame.lookAt(signPos + Vector3.new(0.4, 4.2, 0), signPos + Vector3.new(10, 4.2, 0)),
 		Material = M.WoodPlanks,
@@ -1484,13 +1716,15 @@ local function buildTraining(lobby: Instance): { CFrame }
 	})
 	signText(board, "TRAINING", Enum.NormalId.Front)
 	signText(board, "TRAINING", Enum.NormalId.Back)
-	marker(board, "TRAINING", C(104, 206, 70), C(55, 137, 36), 3.4)
+	scaleModel(signModel, CFrame.new(signPos), 1.3)
+	signModel.Parent = yard
+	marker(board, "TRAINING", C(104, 206, 70), C(55, 137, 36), topOf(signModel))
 	return spots
 end
 
 local function buildCamp(lobby: Instance)
 	local F = CAMP_POS
-	local camp = Make("Model", { Name = "Campfire", Parent = lobby })
+	local camp = Make("Model", { Name = "Campfire" })
 	for i = 1, 9 do
 		local a = (i / 9) * TAU
 		local s = rng:NextNumber(1, 1.4)
@@ -1519,33 +1753,41 @@ local function buildCamp(lobby: Instance)
 		local tangent = Vector3.new(-math.sin(a), 0, math.cos(a))
 		rod(camp, c - tangent * 2.4, c + tangent * 2.4, 1.3, { Material = M.Wood, Color = PAL.Wood, CanCollide = true })
 	end
+	-- Feuerstelle, Baenke und Flammen gemeinsam auf Menschen-Massstab bringen
+	scaleModel(camp, CFrame.new(F), PROP_SCALE)
+	camp.Parent = lobby
 	-- Zelte rund ums Feuer (Eingang zum Feuer)
-	local tentSpots = { { at(-64, 8), PAL.Canvas }, { at(-63, 36), C(176, 96, 66) }, { at(-40, 42), C(108, 128, 88) } }
+	local tentSpots = { { 210, PAL.Canvas }, { 150, C(176, 96, 66) }, { 90, C(108, 128, 88) } }
 	for _, t in tentSpots do
-		local pos: Vector3 = t[1]
+		local a = math.rad(t[1])
+		local pos = F + Vector3.new(math.cos(a) * 22, 0, math.sin(a) * 22)
 		local dir = Vector3.new(F.X - pos.X, 0, F.Z - pos.Z).Unit
 		tent(lobby, CFrame.new(pos) * CFrame.Angles(0, math.atan2(-dir.Z, dir.X), 0), t[2])
 	end
-	barrel(lobby, at(-56, 27))
-	crate(lobby, CFrame.new(at(-54, 30)) * CFrame.Angles(0, 0.4, 0), 1.8)
+	barrel(lobby, F + Vector3.new(9, 0, 10))
+	crate(lobby, CFrame.new(F + Vector3.new(11.6, 0, 12.2)) * CFrame.Angles(0, 0.4, 0), 1.8)
 	-- Feuerholz-Stapel
+	local wood = F + Vector3.new(10, 0, -7)
 	for i = 0, 2 do
-		local y = 0.45 + (if i == 2 then 0.75 else 0)
-		local x = if i == 2 then 0 else (i - 0.5) * 0.9
-		rod(lobby, at(-34 + x, 24, y) - Vector3.new(0, 0, 1.4), at(-34 + x, 24, y) + Vector3.new(0, 0, 1.4), 0.85, {
+		local y = (0.45 + (if i == 2 then 0.75 else 0)) * PROP_SCALE
+		local x = (if i == 2 then 0 else (i - 0.5) * 0.9) * PROP_SCALE
+		local c = wood + Vector3.new(x, y, 0)
+		rod(lobby, c - Vector3.new(0, 0, 1.8), c + Vector3.new(0, 0, 1.8), 0.85 * PROP_SCALE, {
 			Material = M.Wood,
 			Color = PAL.Bark,
 		})
 	end
 end
 
+-- Arena-Tor in der Nordseite des Dorfzauns. Es ist magisch versiegelt: In die Arena kommt
+-- man nur per Runden-Teleport (die eigentliche Sperre ist die unsichtbare Dorfgrenze).
 local function buildArenaGate(lobby: Instance)
-	local g = at(0, -52)
-	local gate = Make("Model", { Name = "ArenaGate", Parent = lobby })
+	local g = GATE_POS
+	local gate = Make("Model", { Name = "ArenaGate" })
 	for _, x in { -7, 7 } do
 		block(gate, { Size = Vector3.new(1.4, 13, 1.4), CFrame = CFrame.new(g + Vector3.new(x, 5.5, 0)), Material = M.Wood, Color = PAL.WoodDark, CanCollide = true })
 		block(gate, { Size = Vector3.new(2, 1.4, 2), CFrame = CFrame.new(g + Vector3.new(x, 0.3, 0)), Material = M.Cobblestone, Color = PAL.Stone, CanCollide = true })
-		-- Banner am Pfosten
+		-- Banner am Pfosten (Dorfseite)
 		block(gate, {
 			Size = Vector3.new(1.8, 5, 0.12),
 			CFrame = CFrame.new(g + Vector3.new(x, 8.2, 0.78)),
@@ -1566,6 +1808,123 @@ local function buildArenaGate(lobby: Instance)
 	})
 	signText(board, "ARENA", Enum.NormalId.Front)
 	signText(board, "ARENA", Enum.NormalId.Back)
+	scaleModel(gate, CFrame.new(g), GATE_SCALE)
+
+	-- Magisches Siegel in der Toroeffnung (nur Optik: keine Kollision, fuer Raycasts unsichtbar)
+	local inner = 7 * GATE_SCALE - 0.7 * GATE_SCALE -- Innenkante der Pfosten
+	local sealH = (10.2 - 0.4) * GATE_SCALE -- bis unter den unteren Querbalken
+	local seal = block(gate, {
+		Name = "ArenaSeal",
+		Size = Vector3.new(inner * 2, sealH, 0.3),
+		CFrame = CFrame.new(g + Vector3.new(0, sealH / 2, -1)),
+		Material = M.ForceField,
+		Color = C(110, 196, 255),
+		Transparency = 0.2,
+		CanQuery = false,
+		CastShadow = false,
+	})
+	Make("ParticleEmitter", {
+		Name = "SealSparks",
+		Texture = "rbxasset://textures/particles/sparkles_main.dds",
+		Color = ColorSequence.new(C(196, 236, 255), C(110, 176, 255)),
+		LightEmission = 1,
+		LightInfluence = 0,
+		Size = NumberSequence.new({ nsk(0, 0), nsk(0.3, 0.55), nsk(1, 0) }),
+		Transparency = NumberSequence.new(0.15),
+		Lifetime = NumberRange.new(1.4, 2.4),
+		Rate = 10,
+		Speed = NumberRange.new(0.4, 1.2),
+		SpreadAngle = Vector2.new(30, 30),
+		Acceleration = Vector3.new(0, 1.2, 0),
+		EmissionDirection = Enum.NormalId.Back,
+		Parent = seal,
+	})
+	pointLight(seal, C(130, 200, 255), 20, 1.2)
+	-- Hinweisschild am rechten Pfosten (Dorfseite, auf Augenhoehe)
+	local plaque = block(gate, {
+		Name = "SealPlaque",
+		Size = Vector3.new(5.2, 1.5, 0.3),
+		CFrame = CFrame.new(g + Vector3.new(7 * GATE_SCALE, 5.6, 0.7 * GATE_SCALE + 0.2)),
+		Material = M.WoodPlanks,
+		Color = PAL.Plank,
+	})
+	signText(plaque, "ROUNDS ONLY", Enum.NormalId.Back)
+	gate.Parent = lobby
+end
+
+-- Verschlossenes Holzgatter im Dorfzaun (lokal X entlang des Zauns, +Z zeigt ins Dorf)
+local function lakeGate(parent: Instance, mid: Vector3, dir: Vector3, half: number)
+	local model = Make("Model", { Name = "LakeGate" })
+	local cf = CFrame.lookAt(mid, mid + dir) * CFrame.Angles(0, math.rad(90), 0)
+	for _, x in { -half, half } do
+		block(model, { Size = Vector3.new(1.3, 6.6, 1.3), CFrame = cf * CFrame.new(x, 3, 0), Material = M.Wood, Color = PAL.WoodDark, CanCollide = true })
+		ball(model, (cf * CFrame.new(x, 6.5, 0)).Position, 1.5, { Material = M.Wood, Color = PAL.WoodLight, CanQuery = false })
+	end
+	local w = half - 0.75
+	for _, side in { -1, 1 } do
+		local leaf = cf * CFrame.new(side * (w / 2 + 0.1), 2.6, 0)
+		block(model, { Size = Vector3.new(w, 3.6, 0.25), CFrame = leaf, Material = M.WoodPlanks, Color = PAL.Plank, CanCollide = true })
+		for _, y in { -1.25, 1.25 } do
+			block(model, { Size = Vector3.new(w, 0.45, 0.3), CFrame = leaf * CFrame.new(0, y, 0.2), Material = M.Wood, Color = PAL.WoodDark })
+		end
+		block(model, {
+			Size = Vector3.new(0.4, math.sqrt(w * w + 2.5 * 2.5), 0.3),
+			CFrame = leaf * CFrame.new(0, 0, 0.2) * CFrame.Angles(0, 0, side * math.atan2(w, 2.5)),
+			Material = M.Wood,
+			Color = PAL.WoodDark,
+		})
+	end
+	-- Riegel mit Schloss in der Mitte und ein Schild zur Dorfseite
+	block(model, { Size = Vector3.new(2.4, 0.4, 0.35), CFrame = cf * CFrame.new(0, 2.6, 0.35), Material = M.Metal, Color = PAL.Iron })
+	block(model, { Size = Vector3.new(0.6, 0.75, 0.4), CFrame = cf * CFrame.new(0, 2.2, 0.45), Material = M.Metal, Color = PAL.Gold })
+	local board = block(model, { Size = Vector3.new(3.6, 1.1, 0.2), CFrame = cf * CFrame.new(0, 3.75, 0.4), Material = M.WoodPlanks, Color = PAL.Plank })
+	signText(board, "CLOSED", Enum.NormalId.Back)
+	model.Parent = parent
+end
+
+-- Dorfzaun entlang der Grenze (die eigentliche Sperre ist die unsichtbare Wand dahinter).
+-- Nordseite: Arena-Tor. Wo der Weg zum See den Zaun kreuzt: verschlossenes Gatter.
+-- Gibt die Position des Gatters zurueck (fuer die Sperrzonen der Deko).
+local function buildVillageFence(lobby: Instance): Vector3
+	local folder = Make("Model", { Name = "VillageFence", Parent = lobby })
+	local FS = 1.25
+	local gateSide, gateT = 0, 0.5
+	for k = 2, LOBBY_SIDES do
+		local a, b = lobbyCorner(k - 1), lobbyCorner(k)
+		for i = 1, #WEST_PATH - 1 do
+			local t = segmentHit(a, b, WEST_PATH[i], WEST_PATH[i + 1])
+			if t then
+				gateSide, gateT = k, t
+			end
+		end
+	end
+	local gatePos = lobbyCorner(LOBBY_SIDES // 2)
+	for k = 1, LOBBY_SIDES do
+		local a, b = lobbyCorner(k - 1), lobbyCorner(k)
+		if k == 1 then
+			-- Nordseite: dort steht das Arena-Tor, nur der Eckpfosten
+			block(folder, {
+				Size = Vector3.new(0.6, 3.6, 0.6) * FS,
+				CFrame = CFrame.new(a + Vector3.new(0, 1.5 * FS, 0)),
+				Material = M.Wood,
+				Color = PAL.WoodDark,
+				CanCollide = true,
+			})
+		elseif k == gateSide then
+			local len = (b - a).Magnitude
+			local dir = (b - a).Unit
+			local half = 5
+			local t = math.clamp(gateT, (half + 2) / len, 1 - (half + 2) / len)
+			local mid = a:Lerp(b, t)
+			fence(folder, a, mid - dir * half, FS, false)
+			fence(folder, mid + dir * half, b, FS, true)
+			lakeGate(folder, mid, dir, half)
+			gatePos = mid
+		else
+			fence(folder, a, b, FS, true)
+		end
+	end
+	return gatePos
 end
 
 local function buildLobby(map: Instance): (CFrame, { CFrame })
@@ -1599,50 +1958,58 @@ local function buildLobby(map: Instance): (CFrame, { CFrame })
 	local dummySpots = buildTraining(lobby)
 	buildCamp(lobby)
 	buildArenaGate(lobby)
+	local lakeGatePos = buildVillageFence(lobby)
 
-	-- Marktstaende und Haeuser, alle zum Platz gedreht
-	stall(lobby, flatLook(at(40, 14), at(0, 0)), CLOTH[1])
-	stall(lobby, flatLook(at(34, 38), at(0, 0)), CLOTH[2])
-	cottage(lobby, flatLook(at(-62, -58), at(0, 0)), PAL.Roof)
-	cottage(lobby, flatLook(at(74, -4), at(0, 0)), C(120, 84, 70))
-	cottage(lobby, flatLook(at(22, 70), at(0, 0)), PAL.Roof)
+	-- Marktstaende an der Dorfstrasse (Theke zur Strasse) und Haeuser (Tuer zum Platz)
+	for _, st in STALLS do
+		stall(lobby, flatLook(st.Pos, st.Pos + st.Face), st.Roof)
+	end
+	for _, ct in COTTAGES do
+		cottage(lobby, flatLook(ct.Pos, at(0, 0)), ct.Roof)
+	end
 
-	-- Laternen rund um den Platz (Arm zeigt zum Platz)
-	for _, deg in { 20, 65, 115, 160, 205, 245, 295, 345 } do
-		local a = math.rad(deg)
-		local pos = at(math.cos(a) * 34.5, math.sin(a) * 34.5)
+	-- Laternen rund um den Platz (Arm zeigt zum Platz), jeweils zwischen den Wegen
+	for k = 0, 7 do
+		local pos = ring(22.5 + k * 45, 35)
 		lantern(lobby, flatLook(pos, at(0, 0)))
 	end
 
-	signpost(lobby, at(9, -40), {
+	signpost(lobby, SIGN_POS, {
 		{ Text = "ARENA", Target = A },
 		{ Text = "TRAINING", Target = TRAIN_POS },
 		{ Text = "BLACK HOLE", Target = SHRINE_POS },
 	})
 
-	-- Blumen, Buesche und ein paar kleine Baeume am Dorfrand
+	-- Blumen, Buesche und Baeume im Dorf, dazu ein Waldrand ausserhalb des Zauns
+	local function rel(pos: Vector3, r: number): Zone
+		return { x = pos.X - L.X, z = pos.Z - L.Z, r = r }
+	end
 	local occupied: { Zone } = {
-		{ x = 0, z = 0, r = 36 },
-		{ x = SHRINE_POS.X - L.X, z = SHRINE_POS.Z - L.Z, r = 14 },
-		{ x = TRAIN_POS.X - L.X, z = TRAIN_POS.Z - L.Z, r = 21 },
-		{ x = CAMP_POS.X - L.X, z = CAMP_POS.Z - L.Z, r = 9 },
-		{ x = -64, z = 8, r = 7 },
-		{ x = -63, z = 36, r = 7 },
-		{ x = -40, z = 42, r = 7 },
-		{ x = 40, z = 14, r = 8 },
-		{ x = 34, z = 38, r = 8 },
-		{ x = -62, z = -58, r = 11 },
-		{ x = 74, z = -4, r = 11 },
-		{ x = 22, z = 70, r = 11 },
-		{ x = 0, z = -52, r = 10 },
-		{ x = 9, z = -40, r = 4 },
-		{ x = -56, z = 28, r = 4 },
-		{ x = -34, z = 24, r = 3 },
+		{ x = 0, z = 0, r = 37 },
+		rel(SHRINE_POS, 16.5),
+		rel(TRAIN_POS, 23),
+		rel(CAMP_POS, 11),
+		rel(CAMP_POS + Vector3.new(10.5, 0, 11), 4),
+		rel(CAMP_POS + Vector3.new(10, 0, -7), 3.5),
+		rel(GATE_POS, 17),
+		rel(SIGN_POS, 7),
+		rel(lakeGatePos, 9),
+		rel(MENU_CAM, 30),
 	}
+	for _, deg in { 210, 150, 90 } do
+		local a = math.rad(deg)
+		table.insert(occupied, rel(CAMP_POS + Vector3.new(math.cos(a) * 22, 0, math.sin(a) * 22), 10.5))
+	end
+	for _, st in STALLS do
+		table.insert(occupied, rel(st.Pos, 12))
+	end
+	for _, ct in COTTAGES do
+		table.insert(occupied, rel(ct.Pos, 18))
+	end
 	local lr = Random.new(777)
 	local nature = Make("Folder", { Name = "LobbyNature", Parent = lobby })
 	local function freeSpot(minR: number, maxR: number, clearance: number): Vector3?
-		for _ = 1, 30 do
+		for _ = 1, 40 do
 			local a = lr:NextNumber(0, TAU)
 			local d = lr:NextNumber(minR, maxR)
 			local x, z = math.cos(a) * d, math.sin(a) * d
@@ -1660,28 +2027,55 @@ local function buildLobby(map: Instance): (CFrame, { CFrame })
 		end
 		return nil
 	end
-	for i = 1, 9 do
-		local pos = freeSpot(56, 92, 7)
+	-- im Dorf (innerhalb der Zaunlinie; Kronen bleiben diesseits des Zauns)
+	for i = 1, 16 do
+		local pos = freeSpot(58, LOBBY_FENCE - 10, 7)
 		if pos then
-			leafTree(nature, pos, lr:NextNumber(0.75, 0.95), lr, i % 4 == 0)
+			leafTree(nature, pos, lr:NextNumber(1, 1.25), lr, i % 4 == 0)
 		end
 	end
-	for _ = 1, 18 do
-		local pos = freeSpot(38, 92, 2.5)
+	for _ = 1, 30 do
+		local pos = freeSpot(40, LOBBY_FENCE - 5, 2.5)
 		if pos then
-			bush(nature, pos, lr:NextNumber(0.7, 1), lr)
+			bush(nature, pos, lr:NextNumber(0.85, 1.15), lr)
 		end
 	end
-	for _ = 1, 14 do
-		local pos = freeSpot(36, 90, 2.2)
+	for _ = 1, 22 do
+		local pos = freeSpot(38, LOBBY_FENCE - 6, 2.2)
 		if pos then
 			flowers(nature, pos, lr)
 		end
 	end
-	for _ = 1, 5 do
-		local pos = freeSpot(50, 95, 5)
+	for _ = 1, 7 do
+		local pos = freeSpot(50, LOBBY_FENCE - 8, 5)
 		if pos then
-			boulder(nature, pos, lr:NextNumber(0.5, 0.8), lr)
+			boulder(nature, pos, lr:NextNumber(0.6, 0.9), lr)
+		end
+	end
+	-- Hecke innen am Zaun entlang
+	for _ = 1, 18 do
+		local pos = freeSpot(LOBBY_FENCE - 12, LOBBY_FENCE - 4, 2.5)
+		if pos then
+			bush(nature, pos, lr:NextNumber(0.9, 1.25), lr)
+		end
+	end
+	-- Waldrand ausserhalb: Tannen, Laubbaeume und Buesche (als Sperrzone fuer die Tal-Natur)
+	for i = 1, 26 do
+		local pos = freeSpot(LOBBY_FENCE + 8, LOBBY_FENCE + 22, 7)
+		if pos then
+			if i % 3 == 0 then
+				leafTree(nature, pos, lr:NextNumber(1.05, 1.35), lr, false)
+			else
+				pine(nature, pos, lr:NextNumber(1.1, 1.6), lr)
+			end
+			addZone(pos, 7)
+		end
+	end
+	for _ = 1, 30 do
+		local pos = freeSpot(LOBBY_FENCE + 5, LOBBY_FENCE + 20, 3)
+		if pos then
+			bush(nature, pos, lr:NextNumber(1, 1.4), lr)
+			addZone(pos, 3)
 		end
 	end
 
@@ -1787,7 +2181,7 @@ local function buildArena(map: Instance): { CFrame }
 	end
 
 	-- Eingaenge in vier Richtungen (Sueden zeigt zur Lobby)
-	local entrances = { 0, math.pi / 2, math.pi, math.pi * 1.5 }
+	local entrances = ARENA_ENTRANCES
 	local function nearEntrance(a: number, width: number): boolean
 		for _, e in entrances do
 			local d = math.abs(((a - e + math.pi) % TAU) - math.pi)
@@ -2020,8 +2414,8 @@ local function buildValleyProps(map: Instance)
 		while nextAt <= travelled + len and len > 0 do
 			local p = a + seg.Unit * (nextAt - travelled)
 			local perp = Vector3.new(-seg.Unit.Z, 0, seg.Unit.X) * side
-			local pos = snap(p + perp * 7)
-			if (pos - A).Magnitude > AR + 45 then
+			local pos = snap(p + perp * 8)
+			if (pos - A).Magnitude > AR + 45 and math.abs(lobbyExcess(pos)) > 14 then
 				lantern(valley, flatLook(pos, p), 7.5)
 			end
 			side = -side
@@ -2030,10 +2424,10 @@ local function buildValleyProps(map: Instance)
 		travelled += len
 	end
 
-	-- Holz-Wachturm
+	-- Holz-Wachturm (Plattform ca. 20 Studs hoch, Gelaender in Brusthoehe)
 	do
 		local base = snap(TOWER_POS)
-		local tower = Make("Model", { Name = "Watchtower", Parent = valley })
+		local tower = Make("Model", { Name = "Watchtower" })
 		for _, x in { -3, 3 } do
 			for _, z in { -3, 3 } do
 				block(tower, { Size = Vector3.new(1, 20, 1), CFrame = CFrame.new(base + Vector3.new(x, 9, z)), Material = M.Wood, Color = PAL.WoodDark, CanCollide = true })
@@ -2048,13 +2442,15 @@ local function buildValleyProps(map: Instance)
 			block(tower, { Size = Vector3.new(r2[3], 0.4, r2[4]), CFrame = CFrame.new(base + Vector3.new(r2[1], 17.6, r2[2])), Material = M.Wood, Color = PAL.Wood, CanCollide = true })
 		end
 		pyramid(tower, base + Vector3.new(0, 24.5, 0), 5.4, 5.6, 0, { Material = M.RoofShingles, Color = C(118, 74, 52) })
-		lantern(tower, CFrame.new(base + Vector3.new(0, 15.8, -3.6)), 2.6)
+		lantern(tower, CFrame.new(base + Vector3.new(0, 15.8, -3.6)), 2.6, LANTERN_SCALE / 1.3)
+		scaleModel(tower, CFrame.new(base), 1.3)
+		tower.Parent = valley
 	end
 
 	-- Ruinen auf der Wiese
 	for idx, rp in RUINS do
 		local base = snap(rp)
-		local ruin = Make("Model", { Name = "Ruin", Parent = valley })
+		local ruin = Make("Model", { Name = "Ruin" })
 		local yaw = rng:NextNumber(0, TAU)
 		local cf = CFrame.new(base) * CFrame.Angles(0, yaw, 0)
 		local h1, h2 = rng:NextNumber(9, 12), rng:NextNumber(4, 7)
@@ -2075,12 +2471,14 @@ local function buildValleyProps(map: Instance)
 		rod(ruin, (cf * CFrame.new(3, 1.4, -5)).Position, (cf * CFrame.new(8, 1.4, -3)).Position, 2.8, { Material = M.Slate, Color = C(170, 162, 148), CanCollide = true })
 		block(ruin, { Size = Vector3.new(7, 2.4, 1.6), CFrame = cf * CFrame.new(-7, 1.1, -3) * CFrame.Angles(0, 0.8, 0), Material = M.Slate, Color = PAL.Stone, CanCollide = true })
 		block(ruin, { Size = Vector3.new(4, 0.35, 1.7), CFrame = cf * CFrame.new(-7, 2.45, -3) * CFrame.Angles(0, 0.8, 0), Material = M.LeafyGrass, Color = PAL.Moss, CanQuery = false })
+		scaleModel(ruin, cf, 1.25)
+		ruin.Parent = valley
 	end
 
-	-- Holzsteg am See
+	-- Holzsteg am See (ca. 7 Studs breit) und ein Ruderboot fuer zwei
 	do
 		local shore = Vector3.new(LAKE1.X + 58, GROUND, LAKE1.Z)
-		local dock = Make("Model", { Name = "Dock", Parent = valley })
+		local dock = Make("Model", { Name = "Dock" })
 		local deckY = GROUND + 0.3
 		for i = -2, 2 do
 			block(dock, {
@@ -2096,11 +2494,18 @@ local function buildValleyProps(map: Instance)
 				block(dock, { Size = Vector3.new(0.8, 10, 0.8), CFrame = CFrame.new(shore + Vector3.new(x, -4.5, z)), Material = M.Wood, Color = PAL.WoodDark, CanCollide = true })
 			end
 		end
-		lantern(dock, CFrame.new(shore + Vector3.new(-23, deckY - GROUND, 2.6)) * CFrame.Angles(0, math.rad(90), 0), 5)
-		-- kleines Ruderboot
-		local boatCF = CFrame.new(shore + Vector3.new(-16, -3.6, 6.5)) * CFrame.Angles(0, 0.3, 0)
-		block(dock, { Size = Vector3.new(7, 1.2, 3), CFrame = boatCF, Material = M.WoodPlanks, Color = C(132, 90, 56), CanCollide = true })
-		wedge(dock, boatCF * CFrame.new(-4.2, 0, 0) * CFrame.Angles(0, math.rad(90), 0), Vector3.new(3, 1.2, 1.4), { Material = M.WoodPlanks, Color = C(132, 90, 56) })
+		lantern(dock, CFrame.new(shore + Vector3.new(-23, deckY - GROUND, 2.6)) * CFrame.Angles(0, math.rad(90), 0), 5, LANTERN_SCALE / 1.3)
+		scaleModel(dock, CFrame.new(shore), 1.3)
+		dock.Parent = valley
+		-- Ruderboot: Unterkante knapp unter der Wasserlinie (GROUND - 4), skaliert um diese Kante
+		local boat = Make("Model", { Name = "Rowboat" })
+		local waterline = shore + Vector3.new(-20, -4.2, 8.5)
+		local boatCF = CFrame.new(waterline + Vector3.new(0, 0.6, 0)) * CFrame.Angles(0, 0.3, 0)
+		block(boat, { Size = Vector3.new(7, 1.2, 3), CFrame = boatCF, Material = M.WoodPlanks, Color = C(132, 90, 56), CanCollide = true })
+		wedge(boat, boatCF * CFrame.new(-4.2, 0, 0) * CFrame.Angles(0, math.rad(90), 0), Vector3.new(3, 1.2, 1.4), { Material = M.WoodPlanks, Color = C(132, 90, 56) })
+		block(boat, { Size = Vector3.new(0.5, 0.25, 2.6), CFrame = boatCF * CFrame.new(0.8, 0.5, 0), Material = M.Wood, Color = PAL.WoodLight })
+		scaleModel(boat, CFrame.new(waterline) * CFrame.Angles(0, 0.3, 0), 1.6)
+		boat.Parent = valley
 	end
 
 	-- Felsbrocken an der Quelle des Bachs
@@ -2259,8 +2664,153 @@ local function probeShapes(parent: Instance)
 	cw:Destroy()
 end
 
+-- =============================================================================
+-- Grenzen: unsichtbare Waende um Dorf und Arena + Waechter
+-- =============================================================================
+
+-- Eigene Kollisionsgruppe: Die Waende stoppen nur Charaktere (Spieler, Bots, Puppen sind in
+-- "Characters"). Raycasts (Gruppe "Default": Zielen, Faehigkeiten, Cutscene-Kameras, Boden-
+-- suche) und Effekt-Truemmer ("VFX") gehen einfach hindurch.
+local function setupBoundaryGroup(): boolean
+	local ok, err = pcall(function()
+		for _, g in { BOUNDARY_GROUP, "Characters", "VFX" } do
+			if not PhysicsService:IsCollisionGroupRegistered(g) then
+				PhysicsService:RegisterCollisionGroup(g)
+			end
+		end
+		PhysicsService:CollisionGroupSetCollidable(BOUNDARY_GROUP, "Default", false)
+		PhysicsService:CollisionGroupSetCollidable(BOUNDARY_GROUP, "VFX", false)
+		PhysicsService:CollisionGroupSetCollidable(BOUNDARY_GROUP, "Characters", true)
+	end)
+	if not ok then
+		warn("[WorldBuilder] Boundary collision group: " .. tostring(err))
+	end
+	return ok
+end
+
+-- Ein Wandstueck: "normal" zeigt nach aussen, Laenge laeuft tangential
+local function wallSegment(parent: Instance, name: string, center: Vector2, normal: Vector2, length: number, thickness: number, bottom: number, top: number, grouped: boolean)
+	local pos = Vector3.new(center.X, (bottom + top) / 2, center.Y)
+	local part = block(parent, {
+		Name = name,
+		Size = Vector3.new(length, top - bottom, thickness),
+		CFrame = CFrame.lookAt(pos, pos + Vector3.new(normal.X, 0, normal.Y)),
+		Transparency = 1,
+		CanCollide = true,
+		CanTouch = false,
+		CastShadow = false,
+	})
+	if grouped then
+		part.CollisionGroup = BOUNDARY_GROUP
+	end
+end
+
+local function buildBoundaries(map: Instance)
+	local grouped = setupBoundaryGroup()
+
+	-- Dorf: Wand direkt hinter dem Zaun (Innenseite 0.2 Studs hinter der Zaunlinie), 120 hoch
+	local lobbyWalls = Make("Model", { Name = "LobbyBoundary", Parent = map })
+	local lt = 2
+	local lap = LOBBY_FENCE + 0.2 + lt / 2
+	local llen = 2 * (lap + lt / 2) * math.tan(math.pi / LOBBY_SIDES) + 0.4
+	for _, n in LOBBY_NORMALS do
+		wallSegment(lobbyWalls, "LobbyBoundary", Vector2.new(L.X, L.Z) + n * lap, n, llen, lt, GROUND - 8, GROUND + 120, grouped)
+	end
+
+	-- Arena: Ringwand knapp ausserhalb der Kampfflaeche (Innenseite bei AR + 1), so hoch,
+	-- dass auch starker Knockback niemanden darueber schleudert
+	local arenaWalls = Make("Model", { Name = "ArenaBoundary", Parent = map })
+	local alen = 2 * (ARENA_WALL + ARENA_WALL_T / 2) * math.tan(math.pi / ARENA_SIDES) + 0.3
+	for k = 0, ARENA_SIDES - 1 do
+		local a = k * TAU / ARENA_SIDES
+		local n = Vector2.new(math.cos(a), math.sin(a))
+		wallSegment(arenaWalls, "ArenaBoundary", Vector2.new(A.X, A.Z) + n * ARENA_WALL, n, alen, ARENA_WALL_T, GROUND - 6, A.Y + 150, grouped)
+	end
+
+	-- Magische Siegel in den vier Arena-Eingaengen (nur Optik, damit die Grenze sichtbar ist;
+	-- keine Kollision und fuer Raycasts unsichtbar, stoert also keine Kamera)
+	for _, a in ARENA_ENTRANCES do
+		local r = AR + 2.6
+		local pos = Vector3.new(A.X + math.cos(a) * r, GROUND + 4.5, A.Z + math.sin(a) * r)
+		block(arenaWalls, {
+			Name = "ArenaSeal",
+			Size = Vector3.new(21, 9, 0.3),
+			CFrame = CFrame.lookAt(pos, Vector3.new(A.X, pos.Y, A.Z)),
+			Material = M.ForceField,
+			Color = C(110, 196, 255),
+			Transparency = 0.25,
+			CanQuery = false,
+			CastShadow = false,
+		})
+	end
+end
+
+-- Waechter: Wer trotzdem draussen landet (Teleport-Skill hinter einen Gegner an der Wand,
+-- Schwarzes Loch am Rand, Lag ...), wird in Dorf oder Arena zurueckgesetzt - je nachdem,
+-- was naeher ist. Kaempfer in Cutscenes (verankert) und Tote bleiben unangetastet.
+local guardStarted = false
+local function guardCharacter(model: Model)
+	local root = model:FindFirstChild("HumanoidRootPart")
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	if not root or not root:IsA("BasePart") or not hum or hum.Health <= 0 then
+		return
+	end
+	local part = root :: BasePart
+	if part.Anchored then
+		return
+	end
+	local pos = part.Position
+	local lobbyOver = lobbyExcess(pos)
+	local arenaOver = Vector2.new(pos.X - A.X, pos.Z - A.Z).Magnitude - (ARENA_WALL - ARENA_WALL_T / 2)
+	-- Innen an der Wand stehend sind beide Werte hoechstens ca. 0.2, draussen hinter der Wand
+	-- mindestens ca. 2.1 (Wandstaerke + halber Koerper) - dazwischen liegt die Schwelle
+	if lobbyOver < 1.2 or arenaOver < 1 then
+		return
+	end
+	local target: Vector3
+	if lobbyOver <= arenaOver then
+		local d = Vector3.new(pos.X - L.X, 0, pos.Z - L.Z)
+		d = if d.Magnitude > 0.01 then d.Unit else Vector3.zAxis
+		local p = L + d * (LOBBY_FENCE - 8)
+		target = Vector3.new(p.X, groundAt(p.X, p.Z) + 3.5, p.Z)
+	else
+		local d = Vector3.new(pos.X - A.X, 0, pos.Z - A.Z)
+		d = if d.Magnitude > 0.01 then d.Unit else Vector3.zAxis
+		local p = A + d * (AR - 6)
+		target = Vector3.new(p.X, A.Y + 3.5, p.Z)
+	end
+	model:PivotTo(CFrame.new(target) * part.CFrame.Rotation)
+	part.AssemblyLinearVelocity = Vector3.zero
+end
+
+local function startBoundaryGuard()
+	if guardStarted then
+		return
+	end
+	guardStarted = true
+	task.spawn(function()
+		while true do
+			task.wait(0.4)
+			for _, player in Players:GetPlayers() do
+				local character = player.Character
+				if character then
+					guardCharacter(character)
+				end
+			end
+			local npcs = workspace:FindFirstChild("NPCs")
+			if npcs then
+				for _, m in npcs:GetChildren() do
+					if m:IsA("Model") then
+						guardCharacter(m :: Model)
+					end
+				end
+			end
+		end
+	end)
+end
+
 local function registerZones()
-	addZone(L, 100)
+	addZone(L, LOBBY_FENCE + 14) -- ganzes Dorf samt Zaun (aussen pflanzt die Lobby selbst einen Waldrand)
 	addZone(A, AR + 50)
 	addZone(LAKE1, 70)
 	addZone(LAKE2, 56)
@@ -2274,6 +2824,7 @@ local function registerZones()
 	addPolyline(SHRINE_PATH, 5)
 	addPolyline(EAST_PATH, 5)
 	addPolyline(SOUTH_PATH, 5)
+	addPolyline(SOUTHEAST_PATH, 5)
 	addPolyline(STREAM, 9)
 	-- freie Sicht fuer die Menue-Kamera (auf den Dorfplatz und ueber den See)
 	addPolyline({ MENU_CAM, MENU_FOCUS }, 24)
@@ -2300,6 +2851,7 @@ function WorldBuilder.Build(): WorldInfo
 	local lobbySpawn, dummySpots = buildLobby(map)
 	task.wait()
 	local arenaSpawns = buildArena(map)
+	buildBoundaries(map)
 	task.wait()
 
 	-- 2) Landschaft
@@ -2327,6 +2879,9 @@ function WorldBuilder.Build(): WorldInfo
 		CastShadow = false,
 	})
 	cam:SetAttribute("MenuFocus", MENU_FOCUS)
+
+	-- Kaempfer, die irgendwie ausserhalb von Dorf und Arena landen, zuruecksetzen
+	startBoundaryGuard()
 
 	return {
 		LobbySpawn = lobbySpawn,

@@ -49,8 +49,10 @@ Ein Video zählt nur, wenn
 
 Pro Teilnehmer zählt das **Video mit den meisten Aufrufen**.
 
-- **YouTube** (inkl. Shorts): Der Bot findet die Videos **automatisch** über die offizielle YouTube Data API
-  (braucht einen kostenlosen API-Key, siehe unten).
+- **YouTube** (inkl. Shorts):
+  - **ohne API-Key** (Standard): Teilnehmer tragen ihre **Video-Links im Join-Formular** ein, der Bot liest die
+    Aufrufe von der öffentlichen YouTube-Seite. Kein Google-Konto, keine 2FA nötig.
+  - **mit API-Key** (optional): Der Bot findet die Videos zusätzlich **automatisch** über die offizielle YouTube Data API.
 - **TikTok**: TikTok hat keine öffentliche API für fremde Profile. Teilnehmer müssen deshalb ihre
   **Video-Links im Join-Formular eintragen**; der Bot liest die Aufrufe dann von der öffentlichen Videoseite.
   TikTok blockt so etwas manchmal (vor allem von Server-/Hosting-IPs) – dann steht in der Rangliste
@@ -70,7 +72,10 @@ Voraussetzung: [Node.js](https://nodejs.org) 18 oder neuer.
    *View Channels*, *Send Messages*, *Embed Links*, *Attach Files*, *Mention Everyone* (nur für `ping:`).
    Link öffnen und den Bot auf deinen Server einladen.
 
-### 2. YouTube-API-Key holen (kostenlos)
+### 2. YouTube-API-Key holen (optional – kann übersprungen werden)
+Ohne Key funktioniert der Bot auch (siehe oben). Google Cloud verlangt für die Konsole eine
+Bestätigung in zwei Schritten (2FA) – wenn das nicht geht, einfach `YOUTUBE_API_KEY` leer lassen.
+
 1. <https://console.cloud.google.com> → neues Projekt anlegen.
 2. *APIs & Services → Library* → **YouTube Data API v3** → *Enable*.
 3. *APIs & Services → Credentials* → *Create credentials → API key* → Key kopieren (= `YOUTUBE_API_KEY`).

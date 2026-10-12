@@ -60,7 +60,9 @@ function contestEmbed(contest) {
 					`1. Click **Join Contest** and enter your **channel name** and **YouTube or TikTok channel link**.\n` +
 					`2. Upload your Weak Spot video with **${TAG}** in the title or description` +
 					`${videos.ONLY_NEW_VIDEOS ? ' (only videos posted after the start count)' : ''}.\n` +
-					`3. YouTube videos are found automatically. **TikTok:** click **Join Contest** again and paste your video link.\n` +
+					(videos.YOUTUBE_AUTO
+						? `3. YouTube videos are found automatically. **TikTok:** click **Join Contest** again and paste your video link.\n`
+						: `3. Click **Join Contest** again and paste your video link(s).\n`) +
 					`Check the views with \`/contest leaderboard\`.`,
 			},
 		);
@@ -453,7 +455,11 @@ function joinModal(contest, existing) {
 	const videoLinks = new TextInputBuilder()
 		.setCustomId('videos')
 		.setLabel(`Your ${TAG} video links (one per line)`)
-		.setPlaceholder('TikTok: required! YouTube: optional, your videos are found automatically.')
+		.setPlaceholder(
+			videos.YOUTUBE_AUTO
+				? 'TikTok: required! YouTube: optional, your videos are found automatically.'
+				: 'Required – paste the links of your videos here.',
+		)
 		.setStyle(TextInputStyle.Paragraph)
 		.setMaxLength(2000)
 		.setRequired(false);
@@ -510,9 +516,10 @@ async function handleJoinSubmit(interaction, contest) {
 	};
 	store.save();
 
-	const tiktokHint =
-		videos.platformOf(channelLink) === 'tiktok' && !videoLinks.length
-			? `\n\n⚠️ TikTok videos can't be found automatically – click **Join Contest** again and paste your ${TAG} video link(s).`
+	const needsLinks = videos.platformOf(channelLink) === 'tiktok' || !videos.YOUTUBE_AUTO;
+	const linkHint =
+		needsLinks && !videoLinks.length
+			? `\n\n⚠️ Don't forget your video: click **Join Contest** again and paste your ${TAG} video link(s).`
 			: '';
 	await interaction.reply({
 		content:
@@ -520,7 +527,7 @@ async function handleJoinSubmit(interaction, contest) {
 				? `✏️ Your entry was updated:\n**${channelName}** - ${channelLink}`
 				: `✅ You joined **${contest.title}**! Good luck! 🍀\n**${channelName}** - ${channelLink}\n\nThe contest ends ${ts(contest.endsAt)}. Don't forget **${TAG}** in your video!`) +
 			(videoLinks.length ? `\n🎥 ${videoLinks.length} video link(s) saved.` : '') +
-			tiktokHint,
+			linkHint,
 		flags: MessageFlags.Ephemeral | MessageFlags.SuppressEmbeds,
 	});
 	return updateAnnouncement(contest);
@@ -647,7 +654,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.once(Events.ClientReady, async (c) => {
 	console.log(`Logged in as ${c.user.tag}`);
-	if (!process.env.YOUTUBE_API_KEY) console.warn('YOUTUBE_API_KEY is not set – YouTube videos cannot be checked.');
+	if (!videos.YOUTUBE_AUTO) {
+		console.log('No YOUTUBE_API_KEY – YouTube participants have to paste their video links (views are read from the page).');
+	}
 	await checkExpired();
 	setInterval(checkExpired, CHECK_INTERVAL);
 });

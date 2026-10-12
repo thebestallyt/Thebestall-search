@@ -207,6 +207,85 @@ async function tiktokVideo(link) {
 	return video;
 }
 
+// ---------- YouTube ohne API-Key (öffentliche Seiten) ----------
+
+// Schneidet ein JSON-Objekt nach `marker` aus dem HTML (zählt Klammern, beachtet Strings)
+function extractJsonAfter(html, marker) {
+	const at = html.indexOf(marker);
+	if (at === -1) return null;
+	const start = html.indexOf('{', at + marker.length);
+	if (start === -1) return null;
+	let depth = 0;
+	let inString = false;
+	for (let i = start; i < html.length; i++) {
+		const ch = html[i];
+		if (inString) {
+			if (ch === '\\') i++;
+			else if (ch === '"') inString = false;
+		} else if (ch === '"') inString = true;
+		else if (ch === '{') depth++;
+		else if (ch === '}' && --depth === 0) {
+			try {
+				return JSON.parse(html.slice(start, i + 1));
+			} catch {
+				return null;
+			}
+		}
+	}
+	return null;
+}
+
+async function fetchYouTubePage(url) {
+	const res = await fetch(url, {
+		// Cookies überspringen die EU-Zustimmungsseite
+		headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9', Cookie: 'SOCS=CAI; CONSENT=YES+1' },
+		redirect: 'follow',
+		signal: AbortSignal.timeout(15_000),
+	});
+	if (!res.ok) throw new Error(`YouTube answered ${res.status}`);
+	return res.text();
+}
+
+// Liest die Video-Daten aus dem HTML einer YouTube-Videoseite
+function parseYouTubePage(html) {
+	const player = extractJsonAfter(html, 'ytInitialPlayerResponse');
+	const details = player?.videoDetails;
+	if (!details?.videoId) return null;
+	const micro = player.microformat?.playerMicroformatRenderer ?? {};
+	return {
+		platform: 'youtube',
+		id: details.videoId,
+		url: `https://youtu.be/${details.videoId}`,
+		title: details.title ?? '',
+		views: Number(details.viewCount ?? micro.viewCount ?? 0),
+		publishedAt: Date.parse(micro.publishDate ?? micro.uploadDate ?? ''),
+		channelId: details.channelId,
+		tagged: hasHashtag(`${details.title ?? ''}\n${details.shortDescription ?? ''}`, details.keywords ?? []),
+	};
+}
+
+// Kanal-ID aus der Kanalseite lesen (für Links wie youtube.com/@name)
+function parseYouTubeChannelPage(html) {
+	const m =
+		html.match(/"externalId":"(UC[\w-]{22})"/) ??
+		html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/channel\/(UC[\w-]{22})"/) ??
+		html.match(/<meta itemprop="identifier" content="(UC[\w-]{22})"/);
+	return m ? m[1] : null;
+}
+
+async function youtubeVideoFromPage(link) {
+	const id = parseYouTubeVideoId(link);
+	const video = parseYouTubePage(await fetchYouTubePage(`https://www.youtube.com/watch?v=${id}`));
+	if (!video) throw new Error('YouTube did not return the video data (maybe private or blocked)');
+	return video;
+}
+
+async function youtubeChannelIdFromPage(link) {
+	const ref = parseYouTubeChannel(link);
+	if (ref?.id) return ref.id;
+	return parseYouTubeChannelPage(await fetchYouTubePage(`https://www.youtube.com${new URL(link).pathname}`));
+}
+
 // ---------- Contest prüfen ----------
 
 const fmt = (n) => n.toLocaleString('en-US');
@@ -221,8 +300,24 @@ async function checkContest(contest) {
 		const add = (v) => found.set(`${v.platform}:${v.id}`, v);
 
 		try {
-			if (platform === 'youtube') {
-				if (!YT_KEY) throw new Error('YOUTUBE_API_KEY is not set');
+			if (platform === 'youtube' && !YT_KEY) {
+				// Ohne API-Key: nur eingetragene Video-Links, Aufrufe von der Videoseite
+				const links = (entry.videos ?? []).filter((l) => platformOf(l) === 'youtube');
+				if (!links.length) notes.push('no YouTube video link submitted');
+				if (links.length) {
+					entry.youtubeChannelId ??= await youtubeChannelIdFromPage(entry.channelLink);
+					if (!entry.youtubeChannelId) throw new Error('YouTube channel not found');
+				}
+				for (const link of links) {
+					try {
+						const v = await youtubeVideoFromPage(link);
+						if (v.channelId !== entry.youtubeChannelId) notes.push(`${v.url} is not from this channel`);
+						else add(v);
+					} catch (err) {
+						notes.push(`could not read ${link}: ${err.message}`);
+					}
+				}
+			} else if (platform === 'youtube') {
 				entry.youtubeChannelId ??= await resolveYouTubeChannelId(entry.channelLink);
 				if (!entry.youtubeChannelId) throw new Error('YouTube channel not found');
 				// Uploads automatisch + selbst eingetragene Videos
@@ -290,6 +385,9 @@ function formatRanking(results, { showNotes = false } = {}) {
 
 module.exports = {
 	HASHTAG,
+	YOUTUBE_AUTO: Boolean(YT_KEY),
+	parseYouTubePage,
+	parseYouTubeChannelPage,
 	ONLY_NEW_VIDEOS,
 	platformOf,
 	channelLinkError,

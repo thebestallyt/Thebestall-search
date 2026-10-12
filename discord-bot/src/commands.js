@@ -1,7 +1,7 @@
 // Definition der Slash-Commands (/contest ...)
 const { SlashCommandBuilder, ChannelType } = require('discord.js');
 
-const STAFF = '(Admins / Developers / Owners only)';
+const STAFF = '(Staff only)';
 
 const contest = new SlashCommandBuilder()
 	.setName('contest')
@@ -10,7 +10,7 @@ const contest = new SlashCommandBuilder()
 	.addSubcommand((sub) =>
 		sub
 			.setName('start')
-			.setDescription(`Start a new contest – opens a form for title, description and prize ${STAFF}`)
+			.setDescription(`Start a new contest – a form for title, description and prize opens ${STAFF}`)
 			.addStringOption((o) =>
 				o
 					.setName('duration')

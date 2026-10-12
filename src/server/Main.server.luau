@@ -19,6 +19,62 @@ local ShopService = require(Services:WaitForChild("ShopService"))
 local RoundService = require(Services:WaitForChild("RoundService"))
 local AdminService = require(Services:WaitForChild("AdminService"))
 
+-- Rundenteilnahme: "Busy" und "AFK" ----------------------------------------------------------
+-- WICHTIG: Muss VOR WorldBuilder.Build() verbunden werden! Der Weltaufbau (Terrain) dauert einige
+-- Sekunden. Frueher wurde der Status erst danach verbunden und am Ende fuer alle Spieler hart auf
+-- "Busy = true" gesetzt – dabei konnte ein "nicht beschaeftigt" vom Client ueberschrieben werden.
+-- Der Client meldet nur bei Aenderungen, also blieb der Spieler fuer immer von Runden ausgeschlossen.
+--   Busy = im Menue / Tutorial / oeffnet eine Kiste            -> nimmt nicht an Runden teil
+--   AFK  = laenger als Config.Round.AfkTimeout keine Eingabe   -> nimmt nicht an Runden teil
+--          (misst der Client; kurz untaetige Spieler werden weiterhin teleportiert)
+
+local initialised: { [Player]: boolean } = {}
+
+local function initPlayer(player: Player)
+	if initialised[player] then
+		return
+	end
+	initialised[player] = true
+	-- Neue Spieler starten "beschaeftigt" (Startmenue), bis der Client sich meldet.
+	-- Nur setzen, wenn noch nichts gemeldet wurde – einen Wert vom Client NIE ueberschreiben.
+	if player:GetAttribute("Busy") == nil then
+		player:SetAttribute("Busy", true)
+	end
+	if player:GetAttribute("AFK") == nil then
+		player:SetAttribute("AFK", false)
+	end
+end
+
+Net.Event("SetBusy").OnServerEvent:Connect(function(player: Player, busy: any)
+	if type(busy) ~= "boolean" then
+		return
+	end
+	player:SetAttribute("Busy", busy)
+end)
+
+Net.Event("SetAFK").OnServerEvent:Connect(function(player: Player, afk: any)
+	if type(afk) ~= "boolean" or player:GetAttribute("AFK") == afk then
+		return
+	end
+	player:SetAttribute("AFK", afk)
+	if afk then
+		print("[AFK] " .. player.Name .. " is AFK – won't be teleported into rounds until they move again")
+	else
+		print("[AFK] " .. player.Name .. " is back")
+	end
+end)
+
+Players.PlayerAdded:Connect(initPlayer)
+Players.PlayerRemoving:Connect(function(player)
+	initialised[player] = nil
+end)
+-- Spieler, die schon vor dem Verbinden da waren (genau einmal, dank "initialised")
+for _, player in Players:GetPlayers() do
+	initPlayer(player)
+end
+
+-- Welt ---------------------------------------------------------------------------------------
+
 local world = WorldBuilder.Build()
 
 -- Spieler, die schon waehrend des Weltaufbaus gespawnt sind, zur Lobby bringen
@@ -40,9 +96,13 @@ RoundService.Init(world)
 RoundService.Start()
 AdminService.Init()
 
--- Spieler ist im Menue / Tutorial / oeffnet eine Kiste -> nimmt nicht an Runden teil
-Net.Event("SetBusy").OnServerEvent:Connect(function(player, busy)
-	player:SetAttribute("Busy", busy == true)
+-- Sicherheitsnetz: Wer kaempft, ist nicht AFK (der Client meldet SetAFK(false) normalerweise selbst).
+-- Erst nach CombatService.Init() verbinden, damit sich am Verhalten von CombatInput nichts aendert.
+Net.Event("CombatInput").OnServerEvent:Connect(function(player: Player)
+	if player:GetAttribute("AFK") == true then
+		player:SetAttribute("AFK", false)
+		print("[AFK] " .. player.Name .. " is back")
+	end
 end)
 
 -- Tutorial abgeschlossen -> einmalige Belohnung
@@ -66,14 +126,6 @@ Net.Function("EquipAbility").OnServerInvoke = function(player, abilityId, slot)
 		return false, "You can't change your loadout during a round."
 	end
 	return DataService.Equip(player, abilityId, slot)
-end
-
--- Neue Spieler starten "beschaeftigt" (im Startmenue), bis der Client sich meldet
-Players.PlayerAdded:Connect(function(player)
-	player:SetAttribute("Busy", true)
-end)
-for _, player in Players:GetPlayers() do
-	player:SetAttribute("Busy", true)
 end
 
 print("[NOVA CLASH] Server started.")

@@ -5,7 +5,10 @@
 --   sonst gerade Linie), eine Welle laeuft Richtung Ziel; am Ziel ein pulsierender Bodenkreis
 --   und ein schwebendes Schild mit Entfernung
 -- * HUD-Knoepfe werden mit einem gezeichneten, huepfenden Pfeil und einem Rahmen hervorgehoben
+-- * Waehrend das Tutorial laeuft, ist der Spieler "beschaeftigt" (keine Runden). Die Karte sagt das
+--   dem Spieler, und Busy wird bei Abschluss, Ueberspringen UND bei jedem Fehler wieder freigegeben.
 
+local GuiService = game:GetService("GuiService")
 local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -41,7 +44,13 @@ local TOUCH = UserInputService.TouchEnabled and not UserInputService.KeyboardEna
 local CARD_W = 580
 local PAD = 20
 local TEXT_SIZE = 17
-local TOP_OFFSET = 92 -- Platz fuer die Rundenanzeige oben in der Mitte
+-- Platz fuer die Rundenanzeige oben in der Mitte (inkl. Hinweis-Streifen "warum keine Runde",
+-- siehe HUD.luau: Platte bis zu 102 Design-Pixel hoch)
+local TOP_OFFSET = 116
+-- Hinweiszeile unten auf der Karte ("Rounds are paused ..."): Abstand + Trennlinie + Text + Rand
+local NOTE_H = 18
+local NOTE_BOTTOM = 12
+local NOTE_SPACE = 14 + 2 + 8 + NOTE_H + NOTE_BOTTOM
 
 -- Farbe der Boden-Pfeile: warmes Gold, keine Neon-Cyan-Toene
 local GUIDE_COLOR = Color3.fromRGB(255, 214, 96)
@@ -158,6 +167,18 @@ local hudHidden = false
 local currentHighlight: string? = nil
 local pips: { Frame } = {}
 local skipArmedUntil = 0
+
+-- AbsolutePosition wird OHNE die Roblox-Topbar gemessen (Ursprung = unter der Topbar).
+-- Unsere ScreenGui (UI.Screen) hat aber IgnoreGuiInset = true, ihr Ursprung ist die echte
+-- Bildschirmecke. Ohne Umrechnung saessen Rahmen und Pfeil genau um die Topbar-Hoehe
+-- (~58 px, etwa ein Menue-Knopf) zu weit oben.
+local function toGuiOffset(absolute: Vector2): Vector2
+	if gui and gui.IgnoreGuiInset then
+		local inset = GuiService:GetGuiInset()
+		return absolute + inset
+	end
+	return absolute
+end
 
 local function measureText(text: string, size: number, font: Enum.Font, width: number): Vector2
 	local ok, v = pcall(function()
@@ -737,7 +758,9 @@ local function layoutCard(step: Step, animate: boolean)
 	local hasFooter = step.Keys ~= nil or step.Count ~= nil or step.Button ~= nil
 	textLabel.Size = UDim2.fromOffset(textW, textH)
 	local footerY = 86 + textH + 14
-	local height = if hasFooter then footerY + 48 + 18 else 86 + textH + 20
+	local contentEnd = if hasFooter then footerY + 48 else 86 + textH
+	-- darunter die Hinweiszeile (haengt am unteren Kartenrand und folgt so der Groessen-Animation)
+	local height = contentEnd + NOTE_SPACE
 	keysRow.Position = UDim2.fromOffset(PAD, footerY)
 	keysRow.Visible = step.Keys ~= nil
 	progress.Frame.Position = UDim2.new(1, -PAD, 0, footerY + 24)
@@ -865,32 +888,39 @@ local function finish(completed: boolean)
 	running = false
 	runId += 1
 	currentHighlight = nil
-	setGuide(false)
-	gui.Enabled = false
+	-- ZUERST den Rundenstatus freigeben: das darf nie an einem Fehler beim Aufraeumen scheitern,
+	-- sonst bliebe der Spieler fuer immer "beschaeftigt" und wuerde nie in Runden teleportiert.
 	State.TutorialActive = false
-	State.SetBusy("Tutorial", false)
+	local busyOk, busyErr = pcall(State.SetBusy, "Tutorial", false)
+	if not busyOk then
+		warn("[Tutorial] SetBusy failed: " .. tostring(busyErr))
+	end
 	pcall(function()
 		Net.Event("TutorialDone"):FireServer()
 	end)
+	-- danach aufraeumen (Fehler hier werden nur gemeldet)
+	local cleanOk, cleanErr = pcall(function()
+		setGuide(false)
+		gui.Enabled = false
+		ring.Visible = false
+		pointer.Visible = false
+	end)
+	if not cleanOk then
+		warn("[Tutorial] cleanup failed: " .. tostring(cleanErr))
+	end
 	if completed then
-		HUD.Announce({ Text = "YOU'RE READY!", Sub = "Win rounds, open crates, collect them all.", Style = "Victory", Duration = 3 })
+		pcall(HUD.Announce, { Text = "YOU'RE READY!", Sub = "Win rounds, open crates, collect them all.", Style = "Victory", Duration = 3 })
 	end
 	Tutorial.Finished:Fire()
 end
 
 -- Oeffentliche API ---------------------------------------------------------------------------
 
-function Tutorial.Begin()
-	if running then
-		return
-	end
-	running = true
-	runId += 1
-	local myRun = runId
-	State.TutorialActive = true
-	State.SetBusy("Tutorial", true)
+-- Der eigentliche Ablauf (Aufbau + alle Schritte). Laeuft geschuetzt in Tutorial.Begin.
+local function runSteps(myRun: number)
 	skipArmedUntil = 0
 	skipButton.Text = "Skip tutorial"
+	skipButton.TextColor3 = C.Muted
 	hudHidden = State.IsHUDHidden()
 	updateVisibility()
 
@@ -903,26 +933,44 @@ function Tutorial.Begin()
 	end
 	buildPips(#active)
 
-	task.spawn(function()
-		for i, step in active do
-			if not running or runId ~= myRun then
-				return
-			end
-			if step.Skip and step.Skip() then
-				continue
-			end
-			showCard(i, #active, step)
-			setGuide(step.Guide == true)
-			if not waitFor(step, myRun) then
-				return
-			end
-			setGuide(false)
-			currentHighlight = nil
-			completeFlash()
-			task.wait(0.7)
+	for i, step in active do
+		if not running or runId ~= myRun then
+			return
 		end
+		if step.Skip and step.Skip() then
+			continue
+		end
+		showCard(i, #active, step)
+		setGuide(step.Guide == true)
+		if not waitFor(step, myRun) then
+			return
+		end
+		setGuide(false)
+		currentHighlight = nil
+		completeFlash()
+		task.wait(0.7)
+	end
+end
+
+function Tutorial.Begin()
+	if running then
+		return
+	end
+	running = true
+	runId += 1
+	local myRun = runId
+	State.TutorialActive = true
+	State.SetBusy("Tutorial", true)
+
+	task.spawn(function()
+		local ok, err = xpcall(runSteps, debug.traceback, myRun)
+		if not ok then
+			warn("[Tutorial] stopped because of an error: " .. tostring(err))
+		end
+		-- Egal wie der Ablauf endet (fertig oder Fehler): Busy freigeben + TutorialDone senden.
+		-- Wurde schon uebersprungen/beendet, ist runId bereits weitergezaehlt -> nichts tun.
 		if running and runId == myRun then
-			finish(true)
+			finish(ok)
 		end
 	end)
 end
@@ -941,7 +989,7 @@ function Tutorial.Init()
 		BackgroundTransparency = 1,
 		AnchorPoint = Vector2.new(0.5, 0),
 		Position = UDim2.new(0.5, 0, 0, 8),
-		Size = UDim2.fromOffset(CARD_W, TOP_OFFSET + 260),
+		Size = UDim2.fromOffset(CARD_W, TOP_OFFSET + 300),
 		Parent = gui,
 	})
 	UI.Scaled(holder)
@@ -1101,6 +1149,58 @@ function Tutorial.Init()
 	})
 	nextButton.Visible = false
 
+	-- Hinweiszeile: erklaert, warum man waehrend des Tutorials nicht in Runden teleportiert wird
+	local noteDivider = Make("Frame", {
+		Name = "NoteDivider",
+		BackgroundColor3 = C.Line,
+		BackgroundTransparency = 0.35,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, PAD, 1, -(NOTE_BOTTOM + NOTE_H + 8 + 2)),
+		Size = UDim2.new(1, -PAD * 2, 0, 2),
+		Parent = card,
+	})
+	UI.Round(noteDivider)
+	local noteRow = Make("Frame", {
+		Name = "RoundsNote",
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, PAD, 1, -(NOTE_BOTTOM + NOTE_H)),
+		Size = UDim2.new(1, -PAD * 2, 0, NOTE_H),
+		Parent = card,
+	})
+	UI.List(noteRow, true, 8, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
+	-- gezeichnetes Pause-Symbol (zwei goldene Balken mit Kontur)
+	local pauseGlyph = Make("Frame", {
+		Name = "Pause",
+		BackgroundTransparency = 1,
+		Size = UDim2.fromOffset(13, 14),
+		LayoutOrder = 1,
+		Parent = noteRow,
+	})
+	for i = 0, 1 do
+		local bar = Make("Frame", {
+			BackgroundColor3 = C.Gold,
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(i * 8, 0),
+			Size = UDim2.fromOffset(5, 14),
+			Parent = pauseGlyph,
+		})
+		UI.Corner(bar, 2)
+		UI.Stroke(bar, C.Ink, 1.5, 0)
+	end
+	UI.Text({
+		Name = "Text",
+		Text = 'Rounds are <font color="#FFBB28">paused</font> for you during the tutorial',
+		Font = F.Bold,
+		TextSize = 13,
+		TextColor3 = C.SubText,
+		TextWrapped = false,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.fromOffset(0, NOTE_H),
+		LayoutOrder = 2,
+		Parent = noteRow,
+	})
+
 	-- Stempel fuer geschaffte Schritte
 	stamp = UI.Text({
 		Name = "Stamp",
@@ -1172,7 +1272,7 @@ function Tutorial.Init()
 			return
 		end
 		local t = os.clock()
-		local pos = target.AbsolutePosition
+		local pos = toGuiOffset(target.AbsolutePosition)
 		local size = target.AbsoluteSize
 		local pulse = 0.5 + 0.5 * math.sin(t * 6)
 		local grow = 10 + pulse * 4

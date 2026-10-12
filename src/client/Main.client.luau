@@ -18,12 +18,13 @@ local Shop = require(Controllers:WaitForChild("Shop"))
 local Spectate = require(Controllers:WaitForChild("Spectate"))
 local Admin = require(Controllers:WaitForChild("Admin"))
 local Tutorial = require(Controllers:WaitForChild("Tutorial"))
+local AFK = require(Controllers:WaitForChild("AFK"))
 local Menu = require(Controllers:WaitForChild("Menu"))
 
 -- HUD verstecken, bis das Startmenue erscheint
 State.SetHUDHidden("Menu", true)
 
-local ordered = { VFXController, HUD, Ambient, Combat, Crates, Inventory, Shop, Spectate, Admin, Tutorial, Menu }
+local ordered = { VFXController, HUD, Ambient, Combat, Crates, Inventory, Shop, Spectate, Admin, Tutorial, AFK, Menu }
 
 for _, controller in ordered do
 	controller.Init()

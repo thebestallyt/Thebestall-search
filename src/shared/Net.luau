@@ -16,6 +16,7 @@ local EVENTS = {
 	"KillFeed", -- S->C
 	"Notify", -- S->C  kleine Benachrichtigung
 	"SetBusy", -- C->S  Spieler ist im Menue / Tutorial / Kistenoeffnung
+	"SetAFK", -- C->S  (boolean) Spieler ist laenger untaetig (Config.Round.AfkTimeout) bzw. wieder aktiv
 	"TutorialDone", -- C->S
 	"Reward", -- S->C  Muenzen erhalten (fuer Animation)
 	"AdminCommand", -- C->S  Admin-Befehle (werden auf dem Server geprueft!)

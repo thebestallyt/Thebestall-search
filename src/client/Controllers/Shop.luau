@@ -7,6 +7,7 @@
 -- Kauf: Net.Function("BuyItem"):InvokeServer("BlackHole") bzw. ("Coins", index)
 --       -> { Ok, Message?, Simulated?, Granted?, Prompted? }
 
+local GuiService = game:GetService("GuiService")
 local MarketplaceService = game:GetService("MarketplaceService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -1535,7 +1536,9 @@ local function buildPackCard(parent: Instance, index: number, pack: any, cardW: 
 	-- Hover per Mausposition (robuster als MouseEnter/Leave, die beim Wechsel auf den Kaufknopf flackern)
 	local lifted = false
 	table.insert(coinScenes, function(dt: number)
-		local mouse = UserInputService:GetMouseLocation()
+		-- GetMouseLocation zaehlt ab der echten Bildschirmecke (inkl. Topbar), AbsolutePosition
+		-- dagegen ab Unterkante der Topbar -> Inset abziehen, sonst ist der Hover-Bereich verschoben
+		local mouse = UserInputService:GetMouseLocation() - GuiService:GetGuiInset()
 		local pos, size = slot.AbsolutePosition, slot.AbsoluteSize
 		local inside = mouse.X >= pos.X and mouse.X <= pos.X + size.X and mouse.Y >= pos.Y and mouse.Y <= pos.Y + size.Y
 		if inside ~= lifted then

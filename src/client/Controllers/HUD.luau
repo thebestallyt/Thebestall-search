@@ -90,6 +90,24 @@ local lastRoundState = ""
 local lastTimeLeft = -1
 local botHintShown = false
 
+-- Hinweis-Streifen unter der Rundenanzeige: WARUM man nicht in die naechste Runde kommt
+-- (Tutorial / AFK / beschaeftigt). Die Platte waechst dafuer um HINT_SPACE nach unten
+-- (Tutorial.luau laesst oben genug Platz: TOP_OFFSET).
+local ROUND_W = 268
+local ROUND_H = 76
+local HINT_H = 20
+local HINT_SPACE = HINT_H + 6
+local HINT_TEXT = 13
+-- "Busy" kommt erst nach dem Server-Roundtrip an. Kurz nach dem Ende eines lokal bekannten
+-- Grundes (Menue, Kiste, Tutorial) ist es deshalb evtl. noch veraltet -> Schonfrist, damit kein
+-- falscher "busy"-Hinweis aufblitzt.
+local BUSY_GRACE = 2
+local roundHint: Frame
+local roundHintLabel: TextLabel
+local hintKey = "" -- aktuell angezeigter Hinweis ("" = keiner)
+local lastLocalBusyAt = -math.huge
+local plateTween: Tween? = nil
+
 -- unten
 local healthBar: any
 local healthHolder: Frame
@@ -780,7 +798,7 @@ local function buildRound()
 		Name = "Round",
 		AnchorPoint = Vector2.new(0.5, 0),
 		Position = UDim2.new(0.5, 0, 0, 8),
-		Size = UDim2.fromOffset(268, 76),
+		Size = UDim2.fromOffset(ROUND_W, ROUND_H),
 		Radius = 14,
 		ZIndex = 2,
 		Parent = root,
@@ -832,6 +850,35 @@ local function buildRound()
 		Size = UDim2.new(1, -16, 0, 16),
 		Parent = roundPlate,
 	})
+
+	-- Hinweis-Streifen (farbig wie ein Knopf, weisse Schrift mit dunkler Kontur)
+	roundHint = UI.Panel({
+		Name = "JoinHint",
+		Color = C.Gold,
+		Radius = 7,
+		NoShade = true,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, ROUND_H - 1),
+		Size = UDim2.new(1, -16, 0, HINT_H),
+		Visible = false,
+		Parent = roundPlate,
+	})
+	local hs = roundHint:FindFirstChildOfClass("UIStroke")
+	if hs then
+		hs.Thickness = 2
+	end
+	roundHintLabel = UI.Text({
+		Name = "Text",
+		Text = "",
+		Font = F.Heading,
+		TextSize = HINT_TEXT,
+		TextWrapped = false,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Position = UDim2.fromOffset(8, 0),
+		Size = UDim2.new(1, -16, 1, 0),
+		Stroke = 1.5,
+		Parent = roundHint,
+	})
 end
 
 local function showBotHint()
@@ -861,7 +908,8 @@ local function updateRound()
 	elseif s == "Intermission" then
 		tag, tagColor = "NEXT ROUND", C.Gold
 		timer = fmtTime(timeLeft)
-		sub = "Everyone in the lobby joins!"
+		-- steht ein Hinweis darunter (Tutorial/AFK/beschaeftigt), gilt "alle" gerade nicht fuer uns
+		sub = if hintKey ~= "" then "Starting soon..." else "Everyone in the lobby joins!"
 	elseif s == "Countdown" then
 		tag, tagColor = "GET READY", C.Red
 		timer = tostring(math.max(0, math.floor(timeLeft)))
@@ -911,6 +959,66 @@ local function updateRound()
 		spectate.Visible = s == "Fighting" and not inRound
 	end
 	showBotHint()
+end
+
+-- Warum kommt der lokale Spieler NICHT in die naechste Runde? (nil = er kommt mit)
+-- Gibt Text + Name eines Knopf-Stils (Theme.ButtonStyles) fuer die Farbe zurueck.
+local function joinHint(): (string?, string?)
+	if player:GetAttribute("InRound") == true then
+		return nil, nil
+	end
+	local busy = player:GetAttribute("Busy") == true
+	if busy and State.TutorialActive then
+		return "Finish or skip the tutorial to join rounds", "Gold"
+	end
+	if player:GetAttribute("AFK") == true then
+		return "AFK – move to join rounds", "Purple"
+	end
+	-- Sonstiger Grund (Kiste, Menue ...). Waehrend Menue/Kisten-Oeffnung ist das HUD ohnehin
+	-- versteckt – dort nichts anzeigen, sonst schrumpft die Platte sichtbar, sobald das HUD
+	-- zurueckkommt. Direkt danach ist "Busy" evtl. noch veraltet -> erst nach der Schonfrist.
+	if busy and not (State.MenuOpen or State.InCrateOpening) and os.clock() - lastLocalBusyAt > BUSY_GRACE then
+		return "Not joining while busy", "Grey"
+	end
+	return nil, nil
+end
+
+local function refreshJoinHint()
+	if State.MenuOpen or State.InCrateOpening or State.TutorialActive then
+		lastLocalBusyAt = os.clock()
+	end
+	local text, styleName = joinHint()
+	local key = text or ""
+	if key == hintKey then
+		return
+	end
+	local hadHint = hintKey ~= ""
+	hintKey = key
+	if text then
+		local style = Theme.ButtonStyles[styleName or "Grey"] or Theme.ButtonStyles.Grey
+		roundHint.BackgroundColor3 = style.Fill
+		roundHintLabel.Text = text
+		local ls = roundHintLabel:FindFirstChildOfClass("UIStroke")
+		if ls then
+			ls.Color = Theme.Darken(style.Lip, 0.45)
+		end
+		-- Platte waechst nach unten (und bei langem Text in die Breite), Streifen ploppt auf
+		local shrinking = plateTween
+		if shrinking then
+			shrinking:Cancel()
+			plateTween = nil
+		end
+		local w = math.max(ROUND_W, textWidth(text, HINT_TEXT, F.Heading) + 16 + 24)
+		roundPlate.Size = UDim2.fromOffset(w, ROUND_H + HINT_SPACE)
+		roundHint.Visible = true
+		UI.Pop(roundHint, 0.7, 0.3)
+	else
+		roundHint.Visible = false
+		plateTween = UI.Tween(roundPlate, 0.2, { Size = UDim2.fromOffset(ROUND_W, ROUND_H) }, Enum.EasingStyle.Quad)
+	end
+	if hadHint ~= (text ~= nil) then
+		updateRound()
+	end
 end
 
 -- Faehigkeiten + Lebensbalken (unten Mitte) ----------------------------------------------
@@ -1774,6 +1882,14 @@ function HUD.Init()
 		if TOUCH_ONLY then Enum.HorizontalAlignment.Center else Enum.HorizontalAlignment.Right,
 		if TOUCH_ONLY then Enum.VerticalAlignment.Top else Enum.VerticalAlignment.Bottom
 	)
+	if TOUCH_ONLY then
+		-- Handy: Benachrichtigungen direkt unter der (evtl. gewachsenen) Rundenanzeige
+		local function placeToasts()
+			toastHolder.Position = UDim2.new(0.5, 0, 0, math.floor(8 + (ROUND_H + HINT_SPACE + 8) * UI.Scale))
+		end
+		placeToasts()
+		UI.ScaleChanged:Connect(placeToasts)
+	end
 
 	State.HUDVisibilityChanged:Connect(function(hidden: boolean)
 		root.Visible = not hidden
@@ -1800,6 +1916,24 @@ function HUD.Start()
 	end)
 	State.RoundChanged:Connect(updateRound)
 	player:GetAttributeChangedSignal("InRound"):Connect(updateRound)
+
+	-- Hinweis "warum keine Runde": sofort bei Attribut-Aenderungen, dazu ein leichter Takt fuer
+	-- lokale Zustaende ohne eigenes Signal (State.TutorialActive, State.MenuOpen ...)
+	for _, attr in { "Busy", "AFK", "InRound" } do
+		player:GetAttributeChangedSignal(attr):Connect(refreshJoinHint)
+	end
+	State.HUDVisibilityChanged:Connect(refreshJoinHint)
+	task.spawn(function()
+		local warned = false
+		while true do
+			local ok, err = pcall(refreshJoinHint)
+			if not ok and not warned then
+				warned = true
+				warn("[HUD] join hint: " .. tostring(err))
+			end
+			task.wait(0.25)
+		end
+	end)
 
 	Net.Event("Announce").OnClientEvent:Connect(HUD.Announce)
 	Net.Event("KillFeed").OnClientEvent:Connect(addKillFeed)

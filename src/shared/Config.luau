@@ -31,6 +31,10 @@ Config.Round = {
 	BotOnlyFighters = 4,
 	BotOnlyRoundTime = 90,
 	BotOnlyIntermission = 8,
+	-- AFK: Wer so viele Sekunden keine Eingabe macht, gilt als AFK (misst der Client, meldet "SetAFK").
+	-- Kurz untaetige Spieler werden trotzdem in Runden teleportiert – erst AFK-Spieler nicht mehr,
+	-- bis sie sich wieder bewegen oder eine Taste druecken.
+	AfkTimeout = 300,
 }
 
 -- Belohnungen in Muenzen

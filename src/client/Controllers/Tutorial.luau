@@ -960,7 +960,11 @@ function Tutorial.Begin()
 	runId += 1
 	local myRun = runId
 	State.TutorialActive = true
-	State.SetBusy("Tutorial", true)
+	-- geschuetzt: ein Fehler hier darf "running" nicht fuer immer haengen lassen
+	local busyOk, busyErr = pcall(State.SetBusy, "Tutorial", true)
+	if not busyOk then
+		warn("[Tutorial] SetBusy failed: " .. tostring(busyErr))
+	end
 
 	task.spawn(function()
 		local ok, err = xpcall(runSteps, debug.traceback, myRun)

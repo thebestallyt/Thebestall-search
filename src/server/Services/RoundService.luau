@@ -142,6 +142,15 @@ local function logNotJoining(player: Player, reason: string)
 	print("[Rounds] " .. player.Name .. " not joining: " .. reason)
 end
 
+-- Alle Spieler ausserhalb von "joining" mit Grund ausgeben ("fallback", falls er eigentlich bereit ist)
+local function logExcluded(joining: { Player }, fallback: string)
+	for _, player in Players:GetPlayers() do
+		if not table.find(joining, player) then
+			logNotJoining(player, notReadyReason(player) or fallback)
+		end
+	end
+end
+
 local function give(player: Player?, coins: number, reason: string)
 	if player and player.Parent and coins > 0 then
 		DataService.AddCoins(player, coins)
@@ -274,11 +283,7 @@ local function runRound(botOnly: boolean)
 
 	-- 1) Wer macht mit? Alle anderen bekommen eine Zeile im Output (mit Grund).
 	local joining: { Player } = if botOnly then {} else readyPlayers()
-	for _, player in Players:GetPlayers() do
-		if not table.find(joining, player) then
-			logNotJoining(player, notReadyReason(player) or "not enough ready players (bot-only round)")
-		end
-	end
+	logExcluded(joining, "not enough ready players (bot-only round)")
 
 	-- 2) Zuerst die Bots erzeugen (das dauert etwas), damit echte Spieler nicht so lange
 	--    eingefroren in der Arena warten muessen. Spieler bekommen die ersten Startpunkte.
@@ -502,9 +507,15 @@ function RoundService.Start()
 				end
 				broadcast()
 			end
+			-- Admin "Runde starten" mit mindestens einem bereiten Spieler -> echte Runde
+			-- (auch wenn weniger als MinRealPlayers bereit sind), sonst Bot-Runde
+			local forced = forceStart
 			forceStart = false
-			local botOnly = #readyPlayers() < RoundConfig.MinRealPlayers
+			local readyCount = #readyPlayers()
+			local botOnly = readyCount < RoundConfig.MinRealPlayers and not (forced and readyCount > 0)
 			if botOnly and not RoundConfig.BotOnlyRounds then
+				print("[Rounds] Round not started: not enough ready players")
+				logExcluded({}, "not enough ready players")
 				continue
 			end
 			local ok, err = pcall(runRound, botOnly)

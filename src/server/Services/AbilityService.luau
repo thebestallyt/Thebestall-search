@@ -52,7 +52,10 @@ end
 local function safeDistance(origin: Vector3, dir: Vector3, maxDist: number): number
 	refreshRayFilter()
 	local dist = maxDist
+	-- Als "Characters" casten, damit auch die unsichtbaren Lobby-/Arena-Grenzen getroffen werden
+	rayParams.CollisionGroup = "Characters"
 	local hit = workspace:Raycast(origin, dir * maxDist, rayParams)
+	rayParams.CollisionGroup = "Default"
 	if hit then
 		dist = math.max(0, hit.Distance - 2.5)
 	end

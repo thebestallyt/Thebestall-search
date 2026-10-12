@@ -98,7 +98,11 @@ AdminService.Init()
 
 -- Sicherheitsnetz: Wer kaempft, ist nicht AFK (der Client meldet SetAFK(false) normalerweise selbst).
 -- Erst nach CombatService.Init() verbinden, damit sich am Verhalten von CombatInput nichts aendert.
-Net.Event("CombatInput").OnServerEvent:Connect(function(player: Player)
+-- Nur bewusste Aktionen zaehlen – ein automatisches "Block loslassen" (z.B. beim Respawn) nicht.
+Net.Event("CombatInput").OnServerEvent:Connect(function(player: Player, action: any, a: any)
+	if type(action) ~= "string" or (action == "Block" and a ~= true) then
+		return
+	end
 	if player:GetAttribute("AFK") == true then
 		player:SetAttribute("AFK", false)
 		print("[AFK] " .. player.Name .. " is back")

@@ -57,6 +57,7 @@ local lastSent = -math.huge
 local remote: RemoteEvent? = nil
 local busyMismatchSince: number? = nil
 local lastBusyResync = -math.huge
+local lastMousePos: Vector2? = nil
 
 -- UI
 local gui: ScreenGui
@@ -350,7 +351,17 @@ function AFK.Init()
 	end)
 	UserInputService.InputChanged:Connect(function(input: InputObject)
 		local t = input.UserInputType
-		if t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.MouseWheel or t == Enum.UserInputType.Touch then
+		if t == Enum.UserInputType.MouseMovement then
+			-- nur echte Bewegung zaehlen: bei gesperrter Maus (Shift-Lock/Ego-Sicht) kann das Event
+			-- ohne Bewegung kommen (Delta 0, gleiche Position) -> sonst wuerde man nie AFK
+			local p = input.Position
+			local pos2 = Vector2.new(p.X, p.Y)
+			local moved = input.Delta.Magnitude > 0.01 or (lastMousePos ~= nil and (pos2 - lastMousePos).Magnitude > 0.5)
+			lastMousePos = pos2
+			if moved then
+				onActivity()
+			end
+		elseif t == Enum.UserInputType.MouseWheel or t == Enum.UserInputType.Touch then
 			onActivity()
 		elseif isGamepad(t) then
 			local k = input.KeyCode

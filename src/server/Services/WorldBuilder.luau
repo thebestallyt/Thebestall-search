@@ -59,6 +59,20 @@ local BOUNDARY_GROUP = "WorldBoundary" -- stoesst nur mit Charakteren zusammen
 -- Arena-Eingaenge (Winkel um die Arena-Mitte, pi/2 = Sueden = Richtung Lobby)
 local ARENA_ENTRANCES = { 0, math.pi / 2, math.pi, math.pi * 1.5 }
 
+-- Massstab der Requisiten (die Grundmasse in den Bau-Funktionen sind die alten, zu kleinen
+-- Modelle). Ein R15-Charakter ist ca. 5.5 Studs gross.
+local LANTERN_SCALE = 1.5 -- Laterne ca. 12 Studs hoch
+local TENT_SCALE = 1.6
+local COTTAGE_SCALE = 1.8 -- Haus ca. 22 x 18 Studs, Tuer ca. 8 Studs hoch
+local SIGN_SCALE = 1.5
+local GATE_SCALE = 1.8
+local PROP_SCALE = 1.3 -- Faesser, Kisten, Lagerfeuer, Trainingsgeraete
+local SHRINE_SCALE = 1.2
+-- Lage der Haustuer im Hausmodell (lokal, vor dem Skalieren): Tuer-Mitte bei x = -2.6,
+-- Vorderwand bei z = -(D / 2 + 0.1) = -5.1
+local COTTAGE_DOOR_X = -2.6
+local COTTAGE_FRONT = 5.1
+
 -- Seiten-Normalen des Dorf-Vielecks (XZ), Seite 1 zeigt nach Norden (-Z)
 local LOBBY_NORMALS: { Vector2 } = {}
 for k = 0, LOBBY_SIDES - 1 do
@@ -426,7 +440,9 @@ local function marker(adornee: BasePart, title: string, fill: Color3, lip: Color
 		TextColor3 = Color3.new(1, 1, 1),
 		Parent = face,
 	})
-	Make("UITextSizeConstraint", { MinTextSize = 6, MaxTextSize = 96, Parent = label })
+	-- MaxTextSize begrenzt die Schrift aus naechster Naehe; nach unten frei, damit die Schrift
+	-- in der Ferne nicht ueber die (dann kleine) Platte hinausragt
+	Make("UITextSizeConstraint", { MinTextSize = 1, MaxTextSize = 96, Parent = label })
 	Make("UIStroke", { Color = PAL.Ink, Thickness = 1.5, LineJoinMode = Enum.LineJoinMode.Round, Parent = label })
 	return gui
 end
@@ -560,8 +576,8 @@ local COTTAGES: { { Pos: Vector3, Roof: Color3 } } = {
 	{ Pos = ring(240, 92), Roof = PAL.Roof },
 }
 local STALLS: { { Pos: Vector3, Face: Vector3, Roof: Color3 } } = {
-	{ Pos = at(54, -12), Face = Vector3.new(0, 0, 1), Roof = CLOTH[1] },
-	{ Pos = at(54, 12), Face = Vector3.new(0, 0, -1), Roof = CLOTH[2] },
+	{ Pos = at(54, -13), Face = Vector3.new(0, 0, 1), Roof = CLOTH[1] },
+	{ Pos = at(54, 13), Face = Vector3.new(0, 0, -1), Roof = CLOTH[2] },
 }
 local LAKE1 = at(-160, -240)
 local LAKE2 = at(-198, -204)
@@ -570,10 +586,12 @@ local RUINS = { at(-130, -430), at(140, -150), at(236, -470) }
 local MENU_CAM = at(100, 118, 52)
 local MENU_FOCUS = at(-12, -40, 6)
 
--- Vor der Haustuer (lokal -Z zeigt zur Dorfmitte)
+-- Punkt "dist" Studs vor der Haustuer eines Hauses. Die Haeuser schauen zur Dorfmitte
+-- (lokal -Z), die Tuer sitzt links neben der Mitte (siehe cottage()).
 local function doorstep(pos: Vector3, dist: number): Vector3
 	local dir = Vector3.new(L.X - pos.X, 0, L.Z - pos.Z).Unit
-	return pos + dir * dist
+	local right = Vector3.new(-dir.Z, 0, dir.X) -- RightVector von CFrame.lookAt(pos, Mitte)
+	return pos + dir * (COTTAGE_FRONT * COTTAGE_SCALE + dist) + right * (COTTAGE_DOOR_X * COTTAGE_SCALE)
 end
 
 -- Hauptweg Lobby -> Tor -> Arena (hinter dem Tor leicht geschwungen; nur noch Deko,
@@ -592,9 +610,11 @@ end
 -- Weg zum See: endet im Dorf an einem verschlossenen Gatter im Zaun
 local WEST_PATH = { at(-33, 2), at(-78, -2), at(-104, -70), at(-110, -150), at(-98, -228) }
 local SHRINE_PATH = { at(26, -14), SHRINE_POS + Vector3.new(-7, 0, 6) }
-local EAST_PATH = { at(33, 0), at(79, 2) }
-local SOUTH_PATH = { at(0, 33), at(0, 48), doorstep(COTTAGES[3].Pos, 11) }
-local SOUTHEAST_PATH = { at(0, 48), doorstep(COTTAGES[2].Pos, 11) }
+-- Trampelpfade vom Platz zu den Haustueren
+local EAST_PATH = { at(33, 0), doorstep(COTTAGES[1].Pos, 1.5) }
+local SOUTH_PATH = { at(0, 33), at(0, 48), doorstep(COTTAGES[3].Pos, 1.5) }
+local SOUTHEAST_PATH = { at(0, 48), doorstep(COTTAGES[2].Pos, 1.5) }
+local NORTHWEST_PATH = { at(-3, -60), doorstep(COTTAGES[4].Pos, 1.5) }
 local STREAM = { at(-372, -430), at(-320, -392), at(-268, -350), at(-232, -300), at(-205, -258) }
 
 -- =============================================================================
@@ -907,6 +927,7 @@ local function buildPaths()
 	paintPath(EAST_PATH, 7, M.Ground)
 	paintPath(SOUTH_PATH, 6, M.Ground)
 	paintPath(SOUTHEAST_PATH, 6, M.Ground)
+	paintPath(NORTHWEST_PATH, 6, M.Ground)
 	-- ein paar matschige Stellen auf dem Hauptweg
 	for i = 2, #MAIN_PATH - 1, 2 do
 		local p = MAIN_PATH[i]
@@ -1084,15 +1105,6 @@ end
 -- Requisiten: Laternen, Zelte, Staende, Haeuser, Zaeune, Schilder ...
 -- =============================================================================
 
--- Massstab der Requisiten (Grundmasse unten sind die alten, zu kleinen Modelle)
-local LANTERN_SCALE = 1.5
-local TENT_SCALE = 1.6
-local COTTAGE_SCALE = 1.8
-local SIGN_SCALE = 1.5
-local GATE_SCALE = 1.8
-local PROP_SCALE = 1.3 -- Faesser, Kisten, Lagerfeuer, Trainingsgeraete
-local SHRINE_SCALE = 1.2
-
 -- Laterne am Holzpfahl; der Arm zeigt Richtung lokal -Z.
 -- "height" ist die Grundhoehe vor dem Skalieren (Standard 8 -> ca. 12 Studs hoch).
 local function lantern(parent: Instance, cf: CFrame, height: number?, scale: number?)
@@ -1207,8 +1219,9 @@ local function stall(parent: Instance, cf: CFrame, roofColor: Color3)
 		-- Querstrebe zwischen vorderem und hinterem Pfosten
 		block(model, { Size = Vector3.new(0.5, 0.5, 6.4), CFrame = cf * CFrame.new(x, 9.6, 0), Material = M.Wood, Color = PAL.WoodDark })
 	end
-	block(model, { Size = Vector3.new(13.4, 3.2, 2.4), CFrame = cf * CFrame.new(0, 1.6, -2.6), Material = M.WoodPlanks, Color = PAL.Plank, CanCollide = true })
-	block(model, { Size = Vector3.new(14.2, 0.4, 3.2), CFrame = cf * CFrame.new(0, 3.4, -2.6), Material = M.Wood, Color = PAL.WoodLight })
+	-- Theke: Oberkante bei 3 Studs (Hueft-/Taillenhoehe)
+	block(model, { Size = Vector3.new(13.4, 2.6, 2.4), CFrame = cf * CFrame.new(0, 1.3, -2.6), Material = M.WoodPlanks, Color = PAL.Plank, CanCollide = true })
+	block(model, { Size = Vector3.new(14.2, 0.4, 3.2), CFrame = cf * CFrame.new(0, 2.8, -2.6), Material = M.Wood, Color = PAL.WoodLight })
 	-- Rueckwand-Regal
 	block(model, { Size = Vector3.new(12.4, 0.35, 1.6), CFrame = cf * CFrame.new(0, 5.2, 2.6), Material = M.Wood, Color = PAL.WoodLight })
 	for i = 0, 3 do
@@ -1222,7 +1235,7 @@ local function stall(parent: Instance, cf: CFrame, roofColor: Color3)
 	-- Ware auf der Theke und im Regal
 	local goods = { C(204, 52, 46), C(250, 150, 40), C(120, 176, 56), C(230, 196, 70) }
 	for i = 1, 8 do
-		ball(model, (cf * CFrame.new(-6.3 + i * 1.4, 4.05, -2.6 + rng:NextNumber(-0.6, 0.6))).Position, 0.9, {
+		ball(model, (cf * CFrame.new(-6.3 + i * 1.4, 3.45, -2.6 + rng:NextNumber(-0.6, 0.6))).Position, 0.9, {
 			Material = M.SmoothPlastic,
 			Color = goods[(i % #goods) + 1],
 			CanQuery = false,
@@ -1620,12 +1633,14 @@ local function buildTraining(lobby: Instance): { CFrame }
 	local function p(x: number, z: number): Vector3
 		return Vector3.new(T.X + x, GROUND, T.Z + z)
 	end
-	fence(yard, p(-17, -13), p(17, -13))
-	fence(yard, p(-17, -13), p(-17, 13))
+	-- als Kette gebaut (Endpfosten weglassen, wo das naechste Stueck beginnt), damit in den
+	-- Ecken keine zwei Pfosten ineinander stecken
+	fence(yard, p(17, -13), p(-17, -13), nil, true)
+	fence(yard, p(-17, -13), p(-17, 13), nil, true)
 	fence(yard, p(-17, 13), p(4.5, 13))
-	fence(yard, p(13.5, 13), p(17, 13))
+	fence(yard, p(13.5, 13), p(17, 13), nil, true)
 	fence(yard, p(17, 13), p(17, 4.5))
-	fence(yard, p(17, -4.5), p(17, -13))
+	fence(yard, p(17, -4.5), p(17, -13), nil, true)
 	for _, gp in { p(17, 4.5), p(17, -4.5), p(4.5, 13), p(13.5, 13) } do
 		block(yard, { Size = Vector3.new(1.1, 5.6, 1.1), CFrame = CFrame.new(gp + Vector3.new(0, 2.5, 0)), Material = M.Wood, Color = PAL.Wood, CanCollide = true })
 		ball(yard, gp + Vector3.new(0, 5.5, 0), 1.25, { Material = M.Wood, Color = PAL.WoodLight, CanQuery = false })
@@ -1810,13 +1825,15 @@ local function buildArenaGate(lobby: Instance)
 	signText(board, "ARENA", Enum.NormalId.Back)
 	scaleModel(gate, CFrame.new(g), GATE_SCALE)
 
-	-- Magisches Siegel in der Toroeffnung (nur Optik: keine Kollision, fuer Raycasts unsichtbar)
+	-- Magisches Siegel in der Toroeffnung (nur Optik: keine Kollision, fuer Raycasts unsichtbar).
+	-- Es liegt direkt vor der Innenseite der unsichtbaren Dorfgrenze (0.2 Studs hinter der
+	-- Zaunlinie), man laeuft also sichtbar gegen das Siegel.
 	local inner = 7 * GATE_SCALE - 0.7 * GATE_SCALE -- Innenkante der Pfosten
 	local sealH = (10.2 - 0.4) * GATE_SCALE -- bis unter den unteren Querbalken
 	local seal = block(gate, {
 		Name = "ArenaSeal",
 		Size = Vector3.new(inner * 2, sealH, 0.3),
-		CFrame = CFrame.new(g + Vector3.new(0, sealH / 2, -1)),
+		CFrame = CFrame.new(g + Vector3.new(0, sealH / 2, -0.05)),
 		Material = M.ForceField,
 		Color = C(110, 196, 255),
 		Transparency = 0.2,
@@ -1902,21 +1919,18 @@ local function buildVillageFence(lobby: Instance): Vector3
 	for k = 1, LOBBY_SIDES do
 		local a, b = lobbyCorner(k - 1), lobbyCorner(k)
 		if k == 1 then
-			-- Nordseite: dort steht das Arena-Tor, nur der Eckpfosten
-			block(folder, {
-				Size = Vector3.new(0.6, 3.6, 0.6) * FS,
-				CFrame = CFrame.new(a + Vector3.new(0, 1.5 * FS, 0)),
-				Material = M.Wood,
-				Color = PAL.WoodDark,
-				CanCollide = true,
-			})
+			-- Nordseite: dort steht das Arena-Tor. Nur kurze Zaunstuecke von den Ecken bis an die
+			-- Torpfosten (deren Pfosten steckt unsichtbar im dicken Torpfosten), damit keine Luecke bleibt
+			local gx = Vector3.new(7 * GATE_SCALE, 0, 0)
+			fence(folder, a, GATE_POS - gx, FS, true)
+			fence(folder, GATE_POS + gx, b, FS, true)
 		elseif k == gateSide then
 			local len = (b - a).Magnitude
 			local dir = (b - a).Unit
 			local half = 5
 			local t = math.clamp(gateT, (half + 2) / len, 1 - (half + 2) / len)
 			local mid = a:Lerp(b, t)
-			fence(folder, a, mid - dir * half, FS, false)
+			fence(folder, a, mid - dir * half, FS, true) -- Endpfosten = Torpfosten
 			fence(folder, mid + dir * half, b, FS, true)
 			lakeGate(folder, mid, dir, half)
 			gatePos = mid
@@ -2000,11 +2014,13 @@ local function buildLobby(map: Instance): (CFrame, { CFrame })
 		local a = math.rad(deg)
 		table.insert(occupied, rel(CAMP_POS + Vector3.new(math.cos(a) * 22, 0, math.sin(a) * 22), 10.5))
 	end
+	-- Stand ca. 21 x 9 Studs (mit Kisten und Fass), Haus ca. 24 x 23 Studs samt Dachueberstand;
+	-- etwas Luft dazu, damit auch Baumkronen nicht in Dach oder Stoffdach ragen
 	for _, st in STALLS do
-		table.insert(occupied, rel(st.Pos, 12))
+		table.insert(occupied, rel(st.Pos, 13))
 	end
 	for _, ct in COTTAGES do
-		table.insert(occupied, rel(ct.Pos, 18))
+		table.insert(occupied, rel(ct.Pos, 20))
 	end
 	local lr = Random.new(777)
 	local nature = Make("Folder", { Name = "LobbyNature", Parent = lobby })
@@ -2046,8 +2062,10 @@ local function buildLobby(map: Instance): (CFrame, { CFrame })
 			flowers(nature, pos, lr)
 		end
 	end
+	-- Felsen haben Kollision und reichen samt Nebensteinen bis ca. 8 Studs weit: genug Abstand
+	-- zu Wegen und Haeusern, damit sie nirgends im Weg liegen
 	for _ = 1, 7 do
-		local pos = freeSpot(50, LOBBY_FENCE - 8, 5)
+		local pos = freeSpot(50, LOBBY_FENCE - 10, 8)
 		if pos then
 			boulder(nature, pos, lr:NextNumber(0.6, 0.9), lr)
 		end
@@ -2728,13 +2746,15 @@ local function buildBoundaries(map: Instance)
 	end
 
 	-- Magische Siegel in den vier Arena-Eingaengen (nur Optik, damit die Grenze sichtbar ist;
-	-- keine Kollision und fuer Raycasts unsichtbar, stoert also keine Kamera)
+	-- keine Kollision und fuer Raycasts unsichtbar, stoert also keine Kamera). Sie stehen direkt
+	-- an der Innenseite der Ringwand und fuellen die Luecke in der niedrigen Ruinenmauer.
+	local gap = 2 * math.pi * (AR + 3.5) / 48 -- Breite der Mauerluecke (siehe buildArena)
 	for _, a in ARENA_ENTRANCES do
-		local r = AR + 2.6
+		local r = ARENA_WALL - ARENA_WALL_T / 2 + 0.2
 		local pos = Vector3.new(A.X + math.cos(a) * r, GROUND + 4.5, A.Z + math.sin(a) * r)
 		block(arenaWalls, {
 			Name = "ArenaSeal",
-			Size = Vector3.new(21, 9, 0.3),
+			Size = Vector3.new(gap + 1.4, 9, 0.3),
 			CFrame = CFrame.lookAt(pos, Vector3.new(A.X, pos.Y, A.Z)),
 			Material = M.ForceField,
 			Color = C(110, 196, 255),
@@ -2825,6 +2845,7 @@ local function registerZones()
 	addPolyline(EAST_PATH, 5)
 	addPolyline(SOUTH_PATH, 5)
 	addPolyline(SOUTHEAST_PATH, 5)
+	addPolyline(NORTHWEST_PATH, 5)
 	addPolyline(STREAM, 9)
 	-- freie Sicht fuer die Menue-Kamera (auf den Dorfplatz und ueber den See)
 	addPolyline({ MENU_CAM, MENU_FOCUS }, 24)

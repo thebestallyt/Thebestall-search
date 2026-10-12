@@ -83,6 +83,13 @@ Bestätigung in zwei Schritten (2FA) – wenn das nicht geht, einfach `YOUTUBE_A
 Das kostenlose Kontingent (10.000 Einheiten/Tag) reicht locker: eine Prüfung kostet ca. 2–3 Einheiten pro Teilnehmer.
 
 ### 3. Konfigurieren und starten
+
+**Windows (einfach):** Im Ordner `discord-bot` auf **`start.bat`** doppelklicken.
+- Beim ersten Mal öffnet sich die Datei `.env` im Editor → Token, Client-ID und Server-ID eintragen → Strg+S → schließen.
+- Nochmal `start.bat` doppelklicken → der Bot installiert sich, registriert die Befehle und startet.
+- Das schwarze Fenster offen lassen, solange der Bot laufen soll.
+
+**Manuell / Mac / Linux:**
 ```bash
 cd discord-bot
 npm install

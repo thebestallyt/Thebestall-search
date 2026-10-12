@@ -3,3 +3,8 @@
 *.rbxlx.lock
 sourcemap.json
 .DS_Store
+
+# Discord-Bot
+discord-bot/node_modules/
+discord-bot/.env
+discord-bot/data/

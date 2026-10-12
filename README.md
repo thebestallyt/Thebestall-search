@@ -122,3 +122,8 @@ rojo serve                                           # Live-Sync mit dem Rojo-Pl
 - Ohne veröffentlichte Place/API-Zugriff funktionieren DataStores in Studio nicht – das Spiel läuft trotzdem, speichert aber nichts.
 - Der Code wurde gegen die aktuelle Roblox-API typgeprüft. Bitte trotzdem in Studio ausgiebig testen
   (Play-Test mit mehreren Spielern über *Test → Clients and Servers*).
+
+## Discord-Bot für CC-Contests
+
+Im Ordner [`discord-bot/`](discord-bot/README.md) liegt ein Discord-Bot für Content-Creator-Contests
+(meiste Aufrufe auf ein Weak-Spot-Video mit #weakspot, YouTube + TikTok). Einrichtung siehe dort.

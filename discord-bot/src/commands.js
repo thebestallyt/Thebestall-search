@@ -1,55 +1,49 @@
-// Definition der Slash-Commands (/contest ...)
-const { SlashCommandBuilder, ChannelType } = require('discord.js');
+// Definition der Slash-Commands (/event ...)
+const { SlashCommandBuilder } = require('discord.js');
+const { TYPES } = require('./types');
 
 const STAFF = '(Staff only)';
+const eventOpt = (o, required = true) =>
+	o.setName('event').setDescription('Which event (start typing to search)').setRequired(required).setAutocomplete(true);
 
-const contest = new SlashCommandBuilder()
-	.setName('contest')
-	.setDescription('CC view contests for Weak Spot')
+const event = new SlashCommandBuilder()
+	.setName('event')
+	.setDescription('Create and run events, contests, giveaways and sign-ups')
 	.setDMPermission(false)
-	.addSubcommand((sub) =>
-		sub
-			.setName('start')
-			.setDescription(`Start a new contest – a form for title, description and prize opens ${STAFF}`)
-			.addStringOption((o) =>
-				o
-					.setName('duration')
-					.setDescription('How long the contest runs, e.g. 10d, 12h, 1d12h, 2w')
-					.setRequired(true)
-					.setMaxLength(20),
-			)
-			.addChannelOption((o) =>
-				o
-					.setName('channel')
-					.setDescription('Channel to post the contest in (default: this channel)')
-					.addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
-			)
-			.addRoleOption((o) => o.setName('ping').setDescription('Role to ping when the contest starts')),
+	.addSubcommand((s) =>
+		s.setName('create').setDescription(`Create a new event – opens a setup menu ${STAFF}`)
+			.addStringOption((o) => o.setName('type').setDescription('What kind of event?').setRequired(true)
+				.addChoices(...Object.entries(TYPES).map(([value, t]) => ({ name: `${t.emoji} ${t.name}`.slice(0, 100), value })))),
 	)
-	.addSubcommand((sub) =>
-		sub.setName('edit').setDescription(`Edit title, description and prize of the current contest ${STAFF}`),
+	.addSubcommand((s) => s.setName('edit').setDescription(`Open the setup menu of an event ${STAFF}`).addStringOption((o) => eventOpt(o)))
+	.addSubcommand((s) => s.setName('copy').setDescription(`Copy an event's settings into a new draft ${STAFF}`).addStringOption((o) => eventOpt(o)))
+	.addSubcommand((s) => s.setName('list').setDescription('Show all events of this server'))
+	.addSubcommand((s) => s.setName('participants').setDescription('Show who joined an event').addStringOption((o) => eventOpt(o)))
+	.addSubcommand((s) =>
+		s.setName('ranking').setDescription('Views or votes ranking of an event').addStringOption((o) => eventOpt(o))
+			.addBooleanOption((o) => o.setName('refresh').setDescription(`Check videos again now ${STAFF}`)),
 	)
-	.addSubcommand((sub) => sub.setName('list').setDescription('Show everyone who joined the current contest'))
-	.addSubcommand((sub) =>
-		sub
-			.setName('leaderboard')
-			.setDescription('Check YouTube & TikTok: whose #weakspot video has the most views?')
-			.addBooleanOption((o) =>
-				o.setName('refresh').setDescription(`Check again now instead of using the last result ${STAFF}`),
-			),
+	.addSubcommand((s) =>
+		s.setName('vote').setDescription('Vote for an entry').addStringOption((o) => eventOpt(o))
+			.addStringOption((o) => o.setName('entry').setDescription('The entry you vote for').setRequired(true).setAutocomplete(true)),
 	)
-	.addSubcommand((sub) => sub.setName('end').setDescription(`End the current contest now ${STAFF}`))
-	.addSubcommand((sub) =>
-		sub
-			.setName('winner')
-			.setDescription(`Pick the winner of the last contest ${STAFF}`)
-			.addUserOption((o) => o.setName('user').setDescription('The winner (must have joined)').setRequired(true)),
+	.addSubcommand((s) => s.setName('end').setDescription(`End an event now ${STAFF}`).addStringOption((o) => eventOpt(o)))
+	.addSubcommand((s) => s.setName('cancel').setDescription(`Cancel an event without winners ${STAFF}`).addStringOption((o) => eventOpt(o)))
+	.addSubcommand((s) =>
+		s.setName('winner').setDescription(`Pick the winner(s) yourself ${STAFF}`).addStringOption((o) => eventOpt(o))
+			.addUserOption((o) => o.setName('user').setDescription('Winner').setRequired(true))
+			.addUserOption((o) => o.setName('user2').setDescription('2nd winner (optional)'))
+			.addUserOption((o) => o.setName('user3').setDescription('3rd winner (optional)')),
 	)
-	.addSubcommand((sub) =>
-		sub
-			.setName('remove')
-			.setDescription(`Remove someone from the current contest ${STAFF}`)
+	.addSubcommand((s) =>
+		s.setName('reroll').setDescription(`Draw new random winner(s) ${STAFF}`).addStringOption((o) => eventOpt(o))
+			.addIntegerOption((o) => o.setName('count').setDescription('How many new winners').setMinValue(1).setMaxValue(25)),
+	)
+	.addSubcommand((s) =>
+		s.setName('remove').setDescription(`Remove someone from an event ${STAFF}`).addStringOption((o) => eventOpt(o))
 			.addUserOption((o) => o.setName('user').setDescription('Participant to remove').setRequired(true)),
-	);
+	)
+	.addSubcommand((s) => s.setName('export').setDescription(`Download all entries as a spreadsheet (CSV) ${STAFF}`).addStringOption((o) => eventOpt(o)))
+	.addSubcommand((s) => s.setName('config').setDescription(`Server settings: staff roles, timezone, results channel ${STAFF}`));
 
-module.exports = [contest];
+module.exports = [event];

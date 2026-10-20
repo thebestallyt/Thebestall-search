@@ -123,7 +123,8 @@ rojo serve                                           # Live-Sync mit dem Rojo-Pl
 - Der Code wurde gegen die aktuelle Roblox-API typgeprüft. Bitte trotzdem in Studio ausgiebig testen
   (Play-Test mit mehreren Spielern über *Test → Clients and Servers*).
 
-## Discord-Bot für CC-Contests
+## Discord-Event-Bot
 
-Im Ordner [`discord-bot/`](discord-bot/README.md) liegt ein Discord-Bot für Content-Creator-Contests
-(meiste Aufrufe auf ein Weak-Spot-Video mit #weakspot, YouTube + TikTok). Einrichtung siehe dort.
+Im Ordner [`discord-bot/`](discord-bot/README.md) liegt ein Discord-Bot für Events aller Art: Video-Contests
+(YouTube/TikTok-Aufrufe), Einsendungs-Contests mit Voting, Giveaways und Anmeldungen – alles per Setup-Menü
+in Discord einstellbar. Einrichtung siehe dort.

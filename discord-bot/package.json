@@ -1,7 +1,7 @@
 {
-  "name": "weak-spot-contest-bot",
+  "name": "discord-event-bot",
   "version": "1.0.0",
-  "description": "Discord bot for CC view contests (Weak Spot, Roblox)",
+  "description": "Discord bot for events, contests, giveaways and sign-ups",
   "main": "src/index.js",
   "private": true,
   "scripts": {

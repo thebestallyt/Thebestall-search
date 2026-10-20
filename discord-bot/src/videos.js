@@ -1,8 +1,5 @@
 // Prüft die Videos der Teilnehmer auf YouTube und TikTok (#weakspot, Aufrufe)
-const HASHTAG = (process.env.HASHTAG || 'weakspot').replace(/^#/, '').toLowerCase();
 const YT_KEY = process.env.YOUTUBE_API_KEY;
-// Nur Videos zählen, die nach Contest-Start hochgeladen wurden
-const ONLY_NEW_VIDEOS = (process.env.ONLY_NEW_VIDEOS ?? 'true').toLowerCase() !== 'false';
 const UA =
 	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
@@ -72,9 +69,13 @@ function videoLinkError(link) {
 	return `\`${link}\` is not a YouTube or TikTok video link.`;
 }
 
-function hasHashtag(text = '', tags = []) {
-	const re = new RegExp(`#${HASHTAG}(?![\\p{L}\\p{N}_])`, 'iu');
-	return re.test(text) || tags.some((t) => t.replace(/^#/, '').toLowerCase() === HASHTAG);
+// Leerer Hashtag = jedes Video zählt
+function hasHashtag(text = '', tags = [], hashtag = '') {
+	const tag = String(hashtag).replace(/^#/, '').toLowerCase();
+	if (!tag) return true;
+	const esc = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const re = new RegExp(`#${esc}(?![\\p{L}\\p{N}_])`, 'iu');
+	return re.test(text) || tags.some((t) => t.replace(/^#/, '').toLowerCase() === tag);
 }
 
 // ---------- YouTube (Data API v3) ----------
@@ -110,7 +111,7 @@ async function resolveYouTubeChannelId(link) {
 }
 
 // Video-IDs der neuesten Uploads eines Kanals (seit `since`)
-async function youtubeUploads(channelId, since) {
+async function youtubeUploads(channelId, since, onlyNew = true) {
 	const playlistId = `UU${channelId.slice(2)}`;
 	const ids = [];
 	let pageToken;
@@ -124,7 +125,7 @@ async function youtubeUploads(channelId, since) {
 		let reachedOld = false;
 		for (const item of json.items ?? []) {
 			const published = Date.parse(item.contentDetails.videoPublishedAt ?? 0);
-			if (ONLY_NEW_VIDEOS && published < since) {
+			if (onlyNew && published < since) {
 				reachedOld = true;
 				continue;
 			}
@@ -149,7 +150,8 @@ async function youtubeVideos(ids) {
 				views: Number(v.statistics.viewCount ?? 0),
 				publishedAt: Date.parse(v.snippet.publishedAt),
 				channelId: v.snippet.channelId,
-				tagged: hasHashtag(`${v.snippet.title}\n${v.snippet.description}`, v.snippet.tags ?? []),
+				hashText: `${v.snippet.title}\n${v.snippet.description}`,
+				hashTags: v.snippet.tags ?? [],
 			});
 		}
 	}
@@ -191,7 +193,8 @@ function parseTikTokPage(html) {
 		views: Number(item.statsV2?.playCount ?? item.stats?.playCount ?? 0),
 		publishedAt: Number(item.createTime) * 1000,
 		author,
-		tagged: hasHashtag(item.desc, tags),
+		hashText: item.desc ?? '',
+		hashTags: tags,
 	};
 }
 
@@ -260,7 +263,8 @@ function parseYouTubePage(html) {
 		views: Number(details.viewCount ?? micro.viewCount ?? 0),
 		publishedAt: Date.parse(micro.publishDate ?? micro.uploadDate ?? ''),
 		channelId: details.channelId,
-		tagged: hasHashtag(`${details.title ?? ''}\n${details.shortDescription ?? ''}`, details.keywords ?? []),
+		hashText: `${details.title ?? ''}\n${details.shortDescription ?? ''}`,
+		hashTags: details.keywords ?? [],
 	};
 }
 
@@ -290,22 +294,38 @@ async function youtubeChannelIdFromPage(link) {
 
 const fmt = (n) => n.toLocaleString('en-US');
 
-// Prüft alle Teilnehmer und gibt die Rangliste zurück (meiste Aufrufe zuerst)
-async function checkContest(contest) {
+// Prüft alle Teilnehmer eines Video-Events und gibt die Rangliste zurück (meiste Aufrufe zuerst)
+async function checkEvent(event) {
+	const opts = event.views ?? {};
+	const hashtag = opts.hashtag ?? '';
+	const onlyNew = opts.onlyNew !== false;
+	const allowed = opts.platforms?.length ? opts.platforms : ['youtube', 'tiktok'];
+	const keyOf = (kind) => event.fields.find((f) => f.kind === kind)?.key;
+	const channelKey = keyOf('channel');
+	const videosKey = keyOf('videos');
+	const nameKey = keyOf('text');
+	const since = event.startsAt ?? event.createdAt;
+
 	const ranking = [];
-	for (const [userId, entry] of Object.entries(contest.entries)) {
-		const platform = platformOf(entry.channelLink);
+	for (const [userId, entry] of Object.entries(event.entries)) {
+		const channelLink = channelKey ? entry.values[channelKey] : null;
+		const videoLinks = videosKey ? [].concat(entry.values[videosKey] ?? []) : [];
+		const platform = channelLink ? platformOf(channelLink) : null;
 		const notes = [];
 		const found = new Map();
 		const add = (v) => found.set(`${v.platform}:${v.id}`, v);
 
 		try {
-			if (platform === 'youtube' && !YT_KEY) {
+			if (!platform) {
+				notes.push('no YouTube/TikTok channel link');
+			} else if (!allowed.includes(platform)) {
+				notes.push(`${platform} is not allowed in this event`);
+			} else if (platform === 'youtube' && !YT_KEY) {
 				// Ohne API-Key: nur eingetragene Video-Links, Aufrufe von der Videoseite
-				const links = (entry.videos ?? []).filter((l) => platformOf(l) === 'youtube');
+				const links = videoLinks.filter((l) => platformOf(l) === 'youtube');
 				if (!links.length) notes.push('no YouTube video link submitted');
 				if (links.length) {
-					entry.youtubeChannelId ??= await youtubeChannelIdFromPage(entry.channelLink);
+					entry.youtubeChannelId ??= await youtubeChannelIdFromPage(channelLink);
 					if (!entry.youtubeChannelId) throw new Error('YouTube channel not found');
 				}
 				for (const link of links) {
@@ -318,11 +338,11 @@ async function checkContest(contest) {
 					}
 				}
 			} else if (platform === 'youtube') {
-				entry.youtubeChannelId ??= await resolveYouTubeChannelId(entry.channelLink);
+				entry.youtubeChannelId ??= await resolveYouTubeChannelId(channelLink);
 				if (!entry.youtubeChannelId) throw new Error('YouTube channel not found');
 				// Uploads automatisch + selbst eingetragene Videos
-				const ids = new Set(await youtubeUploads(entry.youtubeChannelId, contest.startedAt));
-				for (const link of entry.videos ?? []) {
+				const ids = new Set(await youtubeUploads(entry.youtubeChannelId, since, onlyNew));
+				for (const link of videoLinks) {
 					if (platformOf(link) === 'youtube') ids.add(parseYouTubeVideoId(link));
 					else notes.push('TikTok video ignored (channel is YouTube)');
 				}
@@ -331,8 +351,8 @@ async function checkContest(contest) {
 					else add(v);
 				}
 			} else if (platform === 'tiktok') {
-				const handle = parseTikTokHandle(entry.channelLink);
-				const links = (entry.videos ?? []).filter((l) => platformOf(l) === 'tiktok');
+				const handle = parseTikTokHandle(channelLink);
+				const links = videoLinks.filter((l) => platformOf(l) === 'tiktok');
 				if (!links.length) notes.push('no TikTok video link submitted');
 				for (const link of links) {
 					try {
@@ -349,13 +369,13 @@ async function checkContest(contest) {
 		}
 
 		const valid = [...found.values()].filter(
-			(v) => v.tagged && (!ONLY_NEW_VIDEOS || v.publishedAt >= contest.startedAt),
+			(v) => hasHashtag(v.hashText, v.hashTags, hashtag) && (!onlyNew || v.publishedAt >= since),
 		);
 		valid.sort((a, b) => b.views - a.views);
 		ranking.push({
 			userId,
-			channelName: entry.channelName,
-			channelLink: entry.channelLink,
+			channelName: (nameKey && entry.values[nameKey]) || `@${entry.username}`,
+			channelLink,
 			best: valid[0] ?? null,
 			videoCount: valid.length,
 			notes,
@@ -366,14 +386,15 @@ async function checkContest(contest) {
 }
 
 // Rangliste als Text: "🥇 Luxon Studios - 120,345 views - https://..."
-function formatRanking(results, { showNotes = false } = {}) {
+function formatRanking(results, { showNotes = false, hashtag = '' } = {}) {
+	const what = hashtag ? `#${hashtag.replace(/^#/, '')} video` : 'video';
 	const medals = ['🥇', '🥈', '🥉'];
 	let place = 0;
 	return results.ranking
 		.map((r) => {
 			if (!r.best) {
 				const why = showNotes && r.notes.length ? ` (${r.notes.join('; ')})` : '';
-				return `➖ ${r.channelName} - no #${HASHTAG} video found${why}`;
+				return `➖ ${r.channelName} - no ${what} found${why}`;
 			}
 			const rank = medals[place] ?? `**${place + 1}.**`;
 			place++;
@@ -384,18 +405,16 @@ function formatRanking(results, { showNotes = false } = {}) {
 }
 
 module.exports = {
-	HASHTAG,
 	YOUTUBE_AUTO: Boolean(YT_KEY),
 	parseYouTubePage,
 	parseYouTubeChannelPage,
-	ONLY_NEW_VIDEOS,
 	platformOf,
 	channelLinkError,
 	videoLinkError,
 	hasHashtag,
 	parseTikTokPage,
 	parseYouTubeVideoId,
-	checkContest,
+	checkEvent,
 	formatRanking,
 	fmt,
 };

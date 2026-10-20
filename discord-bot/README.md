@@ -1,64 +1,86 @@
-# Weak Spot CC-Contest-Bot (Discord)
+# Event-Bot (Discord)
 
-Discord-Bot für Content-Creator-Contests zu **Weak Spot** (Roblox): Wer macht das Video mit den meisten Aufrufen?
-Alle Texte im Bot sind auf **Englisch**.
+Ein Discord-Bot für **alle Arten von Events**: Video-Contests, Einsendungs-Contests mit Voting, Giveaways,
+Anmeldungen für Turniere – oder komplett eigene Events. Fast alles lässt sich direkt in Discord über ein
+**Setup-Menü mit Knöpfen** einstellen. Alle Texte im Bot sind auf **Englisch**.
 
-## Ablauf
+## Event-Typen (Vorlagen)
 
-1. **Admin / Developer / Owner** startet einen Contest: `/contest start duration:10d`
-   → es öffnet sich ein Formular für **Titel**, **Beschreibung/Regeln** (mehrzeilig) und **Preis**.
-   Optional: `channel:` (wo gepostet wird) und `ping:` (Rolle, die erwähnt wird).
-2. Im Kanal erscheint eine Contest-Nachricht mit **Join Contest**-Knopf. Wer mitmacht, gibt ein:
-   - **Channel name** (z. B. `Luxon Studios`)
-   - **YouTube- oder TikTok-Kanal-Link**
-   - optional die **Video-Links** (bei TikTok Pflicht, siehe unten)
+| Typ | Wofür | Standard |
+|---|---|---|
+| 🎥 **Video views contest** | Wer hat die meisten Aufrufe auf YouTube/TikTok? | Formular: Kanalname, Kanal-Link, Video-Links · Hashtag-Pflicht · Rangliste nach Aufrufen |
+| 🎨 **Submission contest** | Builds, Art, Clips, Screenshots … | Formular: Link + Notiz · optional **Voting** (während oder nach der Deadline) |
+| 🎁 **Giveaway** | Gewinnspiel | kein Formular, ein Klick zum Mitmachen · **zufällige Auslosung** |
+| 📋 **Sign-up** | Turniere, Treffen, Tryouts | Formular: Roblox-Name · **begrenzte Plätze** · keine Gewinner |
+| ⚙️ **Custom event** | alles andere | frei einstellbar |
 
-   Nochmal auf *Join Contest* klicken = Eintrag bearbeiten / Videos hinzufügen. *Leave* = austreten.
-3. Nach Ablauf (z. B. 10 Tage) schließt der Bot den Contest **automatisch**, prüft alle Videos und postet:
-   - die **Rangliste nach Aufrufen** (nur Videos mit **#weakspot**),
-   - die **Teilnehmerliste** im gewünschten Format (+ als `.txt`-Datei):
-     ```
-     Luxon Studios - https://www.youtube.com/@LuxonStudios,
-     Thebestall - https://www.tiktok.com/@thebestall
-     ```
-   - ein **Auswahlmenü**, in dem du den **Gewinner** auswählst (nur Staff kann es benutzen).
-4. Der Bot verkündet den Gewinner im Contest-Kanal.
+Die Vorlage ist nur der Startpunkt – jede Einstellung kann danach geändert werden.
+
+## So erstellst du ein Event
+
+1. `/event create type:…` → es öffnet sich (nur für dich sichtbar) das **Setup-Menü**.
+2. Einstellungen anpassen (siehe unten), mit **👁️ Preview** anschauen.
+3. **🚀 Publish** → das Event wird im gewählten Kanal gepostet (sofort oder zur geplanten Startzeit).
+4. Mitglieder klicken auf den Knopf (z. B. **Join**), füllen das Formular aus – fertig.
+5. Am Ende beendet der Bot das Event **automatisch**, postet die Ergebnisse und ermittelt die Gewinner
+   (oder zeigt dem Staff ein Auswahlmenü).
+
+### Was man im Setup-Menü einstellen kann
+
+| Knopf | Einstellungen |
+|---|---|
+| 📝 **Text & look** | Titel, Beschreibung/Regeln, Preis, Bild (URL), Farbe |
+| ⏰ **Time & limits** | Start (sofort, z. B. `2h` später oder Datum `2026-10-31 18:00`), Ende (Dauer wie `10d` oder Datum), max. Teilnehmer, Erinnerungen vor dem Ende (z. B. `24, 1` Stunden) |
+| 🧾 **Join form** | bis zu **5 eigene Fragen** – Typ: Text, langer Text, Link, Zahl (bei Video-Contests auch Kanal-Link und Video-Links), Pflicht ja/nein. Keine Fragen = ein Klick zum Mitmachen |
+| 📢 **Channels & roles** | Event-Kanal, Ergebnis-Kanal (z. B. Staff-Kanal), Rolle zum Pingen, **Rolle die man zum Mitmachen braucht** |
+| 🏆 **Winners & results** | Gewinner-Modus (keine / Staff wählt / Zufall / meiste Votes / meiste Views), Anzahl Gewinner, Format der Teilnehmerliste, Text auf dem Join-Knopf, Teilnehmerliste öffentlich ja/nein, Austreten/Bearbeiten erlaubt ja/nein |
+| 🎥 **Video settings** | Pflicht-Hashtag (leer = jedes Video), YouTube/TikTok, nur Videos nach dem Start |
+| 🗳️ **Voting** | aus / während des Events / nach der Deadline (+ Dauer), für sich selbst voten ja/nein |
+
+**Listen-Format:** Platzhalter `{user}` (Erwähnung), `{username}` und die Schlüssel deiner Fragen, die im Menü
+angezeigt werden, z. B. `{name} - {link}` ergibt `Luxon Studios - https://…`.
+
+Laufende Events lassen sich mit `/event edit` weiter anpassen – die Event-Nachricht wird sofort aktualisiert.
 
 ## Befehle
 
 | Befehl | Wer | Was |
 |---|---|---|
-| `/contest start duration:10d` | Staff | Neuen Contest starten (Formular für Titel/Beschreibung/Preis). Dauer z. B. `10d`, `12h`, `1d12h`, `2w` |
-| `/contest edit` | Staff | Titel, Beschreibung und Preis nachträglich ändern |
-| `/contest list` | alle | Teilnehmerliste anzeigen |
-| `/contest leaderboard` | alle | YouTube/TikTok prüfen: wer hat die meisten Aufrufe? (Staff: `refresh:True` = sofort neu prüfen, sonst 10 Min. Cache; Staff sieht auch, warum Videos nicht zählen) |
-| `/contest end` | Staff | Contest sofort beenden |
-| `/contest winner user:@…` | Staff | Gewinner wählen (Alternative zum Auswahlmenü) |
-| `/contest remove user:@…` | Staff | Teilnehmer entfernen (z. B. bei Fake-Views) |
+| `/event create type:` | Staff | Neues Event anlegen (Setup-Menü) |
+| `/event edit event:` | Staff | Setup-Menü eines Events öffnen |
+| `/event copy event:` | Staff | Einstellungen eines Events als neuen Entwurf kopieren (für wiederkehrende Events) |
+| `/event list` | alle | Alle Events des Servers |
+| `/event participants event:` | alle* | Teilnehmerliste (*wenn öffentlich, Staff immer) |
+| `/event ranking event:` | alle | Aufrufe- oder Vote-Rangliste (`refresh:True` = Staff prüft Videos sofort neu) |
+| `/event vote event: entry:` | alle | Abstimmen (Alternative zum 🗳️-Knopf, auch bei mehr als 25 Einträgen) |
+| `/event end event:` | Staff | Event (oder Voting) sofort beenden |
+| `/event cancel event:` | Staff | Event absagen (Entwürfe werden gelöscht) |
+| `/event winner event: user: …` | Staff | Gewinner selbst festlegen (bis zu 3 auf einmal) |
+| `/event reroll event:` | Staff | Neu auslosen (andere Gewinner als vorher) |
+| `/event remove event: user:` | Staff | Teilnehmer entfernen |
+| `/event export event:` | Staff | Alle Einträge als Tabelle (CSV) + Textliste herunterladen |
+| `/event config` | Staff | Server-Einstellungen: Staff-Rollen, Standard-Ergebniskanal, Zeitzone |
 
-**Staff** = Server-Besitzer, alle mit *Administrator*-Recht und alle mit einer Rolle namens
-`Owner`, `Developer` oder `Admin` (einstellbar in `.env` → `STAFF_ROLE_NAMES` / `STAFF_ROLE_IDS`).
-Es kann immer nur **ein** Contest gleichzeitig laufen.
+Bei `event:` einfach anfangen zu tippen – der Bot schlägt passende Events vor.
+Auf der Event-Nachricht gibt es je nach Einstellung die Knöpfe **Join**, **Leave**, **🗳️ Vote**, **📊 Ranking** und **👥 Participants**.
 
-## Wie die Videos geprüft werden
+**Staff** = Server-Besitzer, alle mit *Administrator* oder *Server verwalten*, und die Rollen aus `/event config`.
+Solange dort keine Rollen gewählt sind, zählen auch Rollen namens `Owner`, `Developer`, `Admin` (änderbar in `.env`).
 
-Ein Video zählt nur, wenn
-- **#weakspot** im Titel, in der Beschreibung oder in den Tags steht (Hashtag in `.env` → `HASHTAG` änderbar),
-- es **nach dem Contest-Start** hochgeladen wurde (`ONLY_NEW_VIDEOS=false` schaltet das ab),
-- es **vom eingetragenen Kanal** stammt (fremde Videos werden ignoriert).
+## Gewinner-Modi
 
-Pro Teilnehmer zählt das **Video mit den meisten Aufrufen**.
+- **No winners** – nur Anmeldungen sammeln (z. B. Turnier).
+- **Staff picks** – am Ende erscheint im Ergebnis-Kanal ein Auswahlmenü (bei Video-/Vote-Events nach Rang sortiert).
+- **Random draw** – der Bot lost automatisch aus und verkündet die Gewinner; `/event reroll` lost neu.
+- **Most votes** – Mitglieder stimmen ab (1 Stimme pro Person, änderbar), die meisten Stimmen gewinnen. Stimmen sind bis zum Ende geheim.
+- **Most views** – nur Video-Contests: die meisten Aufrufe gewinnen automatisch.
 
-- **YouTube** (inkl. Shorts):
-  - **ohne API-Key** (Standard): Teilnehmer tragen ihre **Video-Links im Join-Formular** ein, der Bot liest die
-    Aufrufe von der öffentlichen YouTube-Seite. Kein Google-Konto, keine 2FA nötig.
-  - **mit API-Key** (optional): Der Bot findet die Videos zusätzlich **automatisch** über die offizielle YouTube Data API.
-- **TikTok**: TikTok hat keine öffentliche API für fremde Profile. Teilnehmer müssen deshalb ihre
-  **Video-Links im Join-Formular eintragen**; der Bot liest die Aufrufe dann von der öffentlichen Videoseite.
-  TikTok blockt so etwas manchmal (vor allem von Server-/Hosting-IPs) – dann steht in der Rangliste
-  „could not read …“ und du musst die Aufrufe bei diesem Video selbst nachschauen.
+## Video-Contests
 
-Den Gewinner wählst am Ende immer **du** aus – die Rangliste ist die Entscheidungshilfe.
+- **YouTube**: mit API-Key findet der Bot die Videos **automatisch**; ohne Key tragen Teilnehmer ihre Video-Links ein
+  und der Bot liest die Aufrufe von der Videoseite.
+- **TikTok**: Teilnehmer tragen ihre Video-Links ein (TikTok blockt so etwas manchmal – dann steht „could not read …“ in der Rangliste).
+- Es zählen nur Videos mit dem Hashtag (falls gesetzt), vom eingetragenen Kanal und – wenn eingestellt – nach dem Start.
 
 ## Einrichtung
 
@@ -69,23 +91,20 @@ Voraussetzung: [Node.js](https://nodejs.org) 18 oder neuer.
 2. **Bot** → *Reset Token* → Token kopieren (= `DISCORD_TOKEN`).
 3. **General Information** → *Application ID* kopieren (= `CLIENT_ID`).
 4. **OAuth2 → URL Generator**: Scopes `bot` + `applications.commands`, Bot-Rechte
-   *View Channels*, *Send Messages*, *Embed Links*, *Attach Files*, *Mention Everyone* (nur für `ping:`).
+   *View Channels*, *Send Messages*, *Embed Links*, *Attach Files*, *Mention Everyone* (nur zum Pingen von @everyone/Rollen).
    Link öffnen und den Bot auf deinen Server einladen.
 
-### 2. YouTube-API-Key holen (optional – kann übersprungen werden)
-Ohne Key funktioniert der Bot auch (siehe oben). Google Cloud verlangt für die Konsole eine
-Bestätigung in zwei Schritten (2FA) – wenn das nicht geht, einfach `YOUTUBE_API_KEY` leer lassen.
-
+### 2. YouTube-API-Key (optional)
+Nur für Video-Contests nötig, damit YouTube-Videos automatisch gefunden werden.
 1. <https://console.cloud.google.com> → neues Projekt anlegen.
 2. *APIs & Services → Library* → **YouTube Data API v3** → *Enable*.
 3. *APIs & Services → Credentials* → *Create credentials → API key* → Key kopieren (= `YOUTUBE_API_KEY`).
+4. Key anklicken → *API restrictions* → nur **YouTube Data API v3** → *Save*. Den Key nirgends öffentlich posten.
 
-Das kostenlose Kontingent (10.000 Einheiten/Tag) reicht locker: eine Prüfung kostet ca. 2–3 Einheiten pro Teilnehmer.
+### 3. Starten
 
-### 3. Konfigurieren und starten
-
-**Windows (einfach):** Im Ordner `discord-bot` auf **`start.bat`** doppelklicken.
-- Beim ersten Mal öffnet sich die Datei `.env` im Editor → Token, Client-ID und Server-ID eintragen → Strg+S → schließen.
+**Windows:** Im Ordner `discord-bot` auf **`start.bat`** doppelklicken.
+- Beim ersten Mal öffnet sich die `.env` im Editor → Token, Client-ID und Server-ID eintragen → Strg+S → schließen.
 - Nochmal `start.bat` doppelklicken → der Bot installiert sich, registriert die Befehle und startet.
 - Das schwarze Fenster offen lassen, solange der Bot laufen soll.
 
@@ -94,24 +113,31 @@ Das kostenlose Kontingent (10.000 Einheiten/Tag) reicht locker: eine Prüfung ko
 cd discord-bot
 npm install
 cp .env.example .env      # dann .env ausfüllen
-npm run deploy            # Slash-Commands registrieren (einmalig bzw. nach Änderungen an den Befehlen)
+npm run deploy            # Slash-Commands registrieren (nach jedem Update nötig)
 npm start                 # Bot starten
 ```
 
-Mit `GUILD_ID` in der `.env` sind die Befehle sofort auf deinem Server da; ohne `GUILD_ID` werden sie global
-registriert (kann bis zu 1 Stunde dauern).
+Danach im Server `/event config` aufrufen und die **Staff-Rollen** und die **Zeitzone** einstellen.
 
-Der Bot muss dauerhaft laufen, damit Contests automatisch enden (z. B. auf einem VPS, Raspberry Pi oder bei einem
-Bot-Hoster). Wenn er zwischendurch offline war, schließt er abgelaufene Contests beim nächsten Start sofort.
-Alle Daten liegen in `data/contests.json`.
+Der Bot muss dauerhaft laufen, damit Events automatisch starten und enden. War er offline, holt er verpasste
+Starts, Erinnerungen und Enden beim nächsten Start nach. Alle Daten liegen in `data/events.json`.
+
+### Update von der alten `/contest`-Version
+Einfach die neuen Dateien übernehmen und `start.bat` starten (bzw. `npm run deploy` + `npm start`).
+Alte Contests aus `data/contests.json` werden **automatisch übernommen** (als Video-Contest), laufende Contest-Nachrichten
+bekommen die neuen Knöpfe, und `/contest` wird durch `/event` ersetzt.
 
 ## Dateien
 
 ```
-src/index.js            Bot: Contest-Nachricht, Knöpfe, Formulare, automatisches Beenden, Gewinner
-src/videos.js           YouTube-/TikTok-Prüfung (#weakspot, Aufrufe, Rangliste)
+src/index.js            Befehle, Knöpfe, Formulare, Setup-Menü
+src/lifecycle.js        Ablauf: veröffentlichen, starten, erinnern, beenden, Voting, Gewinner
+src/render.js           Event-Nachricht, Setup-Menü, Server-Einstellungen
+src/types.js            Event-Typen (Vorlagen), Fragetypen, Gewinner-Modi
+src/videos.js           YouTube-/TikTok-Prüfung (Hashtag, Aufrufe, Rangliste)
+src/time.js             Dauer/Datum mit Zeitzone
+src/store.js            Speichern in data/events.json (+ Übernahme alter Contests)
+src/util.js             Rechte, Links, Listen-Format
 src/commands.js         Slash-Commands
 src/deploy-commands.js  registriert die Slash-Commands bei Discord
-src/store.js            Speichern in data/contests.json
-src/util.js             Rechte-Check, Dauer, Listen-Format
 ```

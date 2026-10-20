@@ -1,5 +1,6 @@
-// Hilfsfunktionen: Rechte, Dauer, Listen-Formatierung
+// Hilfsfunktionen: Rechte, Links, Listen-Formatierung
 const { PermissionFlagsBits } = require('discord.js');
+const store = require('./store');
 
 const csv = (value) =>
 	(value ?? '')
@@ -7,38 +8,36 @@ const csv = (value) =>
 		.map((s) => s.trim())
 		.filter(Boolean);
 
-const STAFF_ROLE_NAMES = csv(process.env.STAFF_ROLE_NAMES || 'Owner,Developer,Admin').map((s) => s.toLowerCase());
-const STAFF_ROLE_IDS = csv(process.env.STAFF_ROLE_IDS);
+// Fallback aus der .env, falls im Server noch keine Staff-Rollen eingestellt sind
+const ENV_ROLE_NAMES = csv(process.env.STAFF_ROLE_NAMES || 'Owner,Developer,Admin').map((s) => s.toLowerCase());
+const ENV_ROLE_IDS = csv(process.env.STAFF_ROLE_IDS);
 
-// Admin-Recht, Server-Besitzer oder eine der Staff-Rollen (Owner / Developer / Admin)
+// Server-Besitzer, Administrator-Recht, "Server verwalten" oder eine Staff-Rolle
 function isStaff(interaction) {
 	if (!interaction.inGuild()) return false;
 	if (interaction.guild?.ownerId === interaction.user.id) return true;
 	if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return true;
+	if (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return true;
 
+	const cfg = store.guildConfig(interaction.guildId);
 	const roles = interaction.member?.roles;
 	const roleIds = Array.isArray(roles) ? roles : [...(roles?.cache?.keys() ?? [])];
 	return roleIds.some((id) => {
-		if (STAFF_ROLE_IDS.includes(id)) return true;
+		if (cfg.staffRoleIds.includes(id) || ENV_ROLE_IDS.includes(id)) return true;
+		if (cfg.staffRoleIds.length) return false;
 		const name = interaction.guild?.roles.cache.get(id)?.name?.toLowerCase();
-		return name !== undefined && STAFF_ROLE_NAMES.includes(name);
+		return name !== undefined && ENV_ROLE_NAMES.includes(name);
 	});
 }
 
-const UNITS = { w: 7 * 86_400_000, d: 86_400_000, h: 3_600_000, m: 60_000 };
-const MAX_DURATION = 365 * UNITS.d;
-
-// "10d", "1d12h", "30m", "2w" -> Millisekunden (null wenn ungültig)
-function parseDuration(input) {
-	const text = input.toLowerCase().replace(/\s+/g, '');
-	if (!/^(\d+[wdhm])+$/.test(text)) return null;
-	let ms = 0;
-	for (const [, num, unit] of text.matchAll(/(\d+)([wdhm])/g)) ms += Number(num) * UNITS[unit];
-	return ms >= UNITS.m && ms <= MAX_DURATION ? ms : null;
+function memberRoleIds(interaction) {
+	const roles = interaction.member?.roles;
+	return Array.isArray(roles) ? roles : [...(roles?.cache?.keys() ?? [])];
 }
 
 function normalizeLink(input) {
-	let text = input.trim();
+	let text = String(input ?? '').trim();
+	if (!text) return null;
 	if (!/^https?:\/\//i.test(text)) text = `https://${text}`;
 	try {
 		const url = new URL(text);
@@ -49,12 +48,31 @@ function normalizeLink(input) {
 	}
 }
 
-const sortedEntries = (contest) => Object.entries(contest.entries).sort((a, b) => a[1].joinedAt - b[1].joinedAt);
+const sortedEntries = (event) => Object.entries(event.entries).sort((a, b) => a[1].joinedAt - b[1].joinedAt);
 
-// "Luxon Studios - https://...," pro Zeile (letzte Zeile ohne Komma)
-function formatList(contest) {
-	const lines = sortedEntries(contest).map(([, e]) => `${e.channelName} - ${e.channelLink}`);
-	return lines.join(',\n');
+const valueText = (v) => (Array.isArray(v) ? v.join(', ') : String(v ?? ''));
+
+// Eine Zeile der Teilnehmerliste nach dem Format des Events, z. B. "{name} - {link}"
+function formatEntry(event, userId, entry, { mention = false } = {}) {
+	const line = event.listFormat.replace(/\{(\w+)\}/g, (m, key) => {
+		if (key === 'user') return mention ? `<@${userId}>` : `@${entry.username}`;
+		if (key === 'username') return entry.username;
+		if (key in entry.values) return valueText(entry.values[key]);
+		return m;
+	});
+	return line.trim() || `@${entry.username}`;
+}
+
+function formatList(event, opts) {
+	return sortedEntries(event)
+		.map(([uid, e]) => formatEntry(event, uid, e, opts))
+		.join(',\n');
+}
+
+// Kurzer Name für Auswahlmenüs: erstes Textfeld oder Benutzername
+function entryLabel(event, userId, entry) {
+	const f = event.fields.find((x) => ['text', 'number'].includes(x.kind) && entry.values[x.key]);
+	return (f ? `${entry.values[f.key]} (@${entry.username})` : `@${entry.username}`).slice(0, 100);
 }
 
 // Teilt einen Text in Stücke <= max Zeichen (an Zeilenumbrüchen)
@@ -72,6 +90,7 @@ function chunkText(text, max = 1900) {
 	return chunks;
 }
 
-const ts = (ms, style = 'R') => `<t:${Math.floor(ms / 1000)}:${style}>`;
+const yes = (s) => /^(y|yes|ja|j|true|1|on)$/i.test(String(s ?? '').trim());
+const no = (s) => /^(n|no|nein|false|0|off)$/i.test(String(s ?? '').trim());
 
-module.exports = { isStaff, parseDuration, normalizeLink, sortedEntries, formatList, chunkText, ts };
+module.exports = { isStaff, memberRoleIds, normalizeLink, sortedEntries, formatEntry, formatList, entryLabel, chunkText, valueText, yes, no };

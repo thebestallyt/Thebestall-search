@@ -1,0 +1,16 @@
+{
+  "name": "yapin-event-bot",
+  "version": "1.0.0",
+  "description": "Yapin' bot for events, contests, giveaways and sign-ups",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}

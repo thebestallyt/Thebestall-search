@@ -8,3 +8,8 @@ sourcemap.json
 discord-bot/node_modules/
 discord-bot/.env
 discord-bot/data/
+
+# Yapin-Bot
+yapper-bot/node_modules/
+yapper-bot/.env
+yapper-bot/data/
